@@ -1,0 +1,187 @@
+import Foundation
+import SwiftData
+import UIKit
+
+enum JobStatus: String, CaseIterable, Codable { case draft = "Draft", inProgress = "In Progress", completed = "Completed" }
+enum PhotoKind: String, Codable { case before, after }
+
+struct JobPhoto: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var kind: PhotoKind
+    var filename: String
+    var capturedAt = Date()
+    var pairedBeforeID: UUID?
+    var note = ""
+}
+
+struct PriceItem: Codable, Identifiable, Hashable {
+    enum Kind: String, Codable { case material, labour, charge }
+    var id = UUID()
+    var kind: Kind
+    var name: String
+    var quantity: String = "1"
+    var unitPrice: String = "0"
+    var sourceReceiptID: UUID?
+    var total: Decimal { Money.rounded(Money.parse(quantity) * Money.parse(unitPrice)) }
+}
+
+struct ReceiptRecord: Codable, Identifiable {
+    var id = UUID()
+    var merchant: String
+    var date: Date
+    var number: String
+    var filename: String
+    var items: [PriceItem]
+    var confirmed: Bool
+}
+
+@Model final class Job {
+    @Attribute(.unique) var id: UUID
+    var number: String
+    var title: String
+    var clientName: String
+    var clientEmail: String
+    var clientPhone: String
+    var siteAddress: String
+    var category: String
+    var issue: String
+    var technician: String
+    var businessName: String
+    var createdAt: Date
+    var completedAt: Date?
+    var statusRaw: String
+    var roughNote: String
+    var professionalNote: String
+    var invoiceNotes: String
+    var currencyCode: String
+    var taxRate: String
+    var discount: String
+    var dueDate: Date
+    var paid: Bool
+    var technicianConfirmed: Bool
+    var photosData: Data
+    var itemsData: Data
+    var receiptsData: Data
+    var isSample: Bool
+
+    init(number: String, title: String, clientName: String, siteAddress: String, category: String, issue: String, technician: String, businessName: String, currencyCode: String, taxRate: String, isSample: Bool = false) {
+        id = UUID(); self.number = number; self.title = title; self.clientName = clientName
+        clientEmail = ""; clientPhone = ""; self.siteAddress = siteAddress; self.category = category
+        self.issue = issue; self.technician = technician; self.businessName = businessName
+        createdAt = Date(); completedAt = nil; statusRaw = JobStatus.draft.rawValue
+        roughNote = ""; professionalNote = ""; invoiceNotes = ""; self.currencyCode = currencyCode
+        self.taxRate = taxRate; discount = "0"; dueDate = Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date()
+        paid = false; technicianConfirmed = false; photosData = Data(); itemsData = Data(); receiptsData = Data(); self.isSample = isSample
+    }
+    var status: JobStatus { get { JobStatus(rawValue: statusRaw) ?? .draft } set { statusRaw = newValue.rawValue; completedAt = newValue == .completed ? Date() : nil } }
+    var photos: [JobPhoto] { get { (try? JSONDecoder().decode([JobPhoto].self, from: photosData)) ?? [] } set { photosData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
+    var items: [PriceItem] { get { (try? JSONDecoder().decode([PriceItem].self, from: itemsData)) ?? [] } set { itemsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
+    var receipts: [ReceiptRecord] { get { (try? JSONDecoder().decode([ReceiptRecord].self, from: receiptsData)) ?? [] } set { receiptsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
+    var summary: String { professionalNote.isEmpty ? roughNote : professionalNote }
+}
+
+@Model final class BusinessProfile {
+    @Attribute(.unique) var id: UUID
+    var businessName: String
+    var ownerName: String
+    var email: String
+    var phone: String
+    var address: String
+    var taxNumber: String
+    var paymentInstructions: String
+    var currencyCode: String
+    var taxRate: String
+    var invoicePrefix: String
+    var logoFilename: String
+    init() {
+        id = UUID(); businessName = ""; ownerName = ""; email = ""; phone = ""; address = ""
+        taxNumber = ""; paymentInstructions = ""; currencyCode = Locale.current.currency?.identifier ?? "ZAR"
+        taxRate = "0"; invoicePrefix = "FR"; logoFilename = ""
+    }
+}
+
+enum Money {
+    static func decimal(_ value: String) -> Decimal? {
+        var normalised = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: " ", with: "")
+        if normalised.contains(",") && normalised.contains(".") {
+            if normalised.lastIndex(of: ",")! > normalised.lastIndex(of: ".")! {
+                normalised = normalised.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
+            } else { normalised = normalised.replacingOccurrences(of: ",", with: "") }
+        } else if normalised.contains(",") {
+            let groups = normalised.split(separator: ",")
+            normalised = groups.count > 1 && groups.dropFirst().allSatisfy { $0.count == 3 } ? groups.joined() : normalised.replacingOccurrences(of: ",", with: ".")
+        }
+        return Decimal(string: normalised, locale: Locale(identifier: "en_US_POSIX"))
+    }
+    static func parse(_ value: String) -> Decimal { decimal(value) ?? .zero }
+    static func isValid(_ value: String) -> Bool { guard let number = decimal(value) else { return false }; return number >= .zero }
+    static func rounded(_ value: Decimal) -> Decimal { var input = value; var output = Decimal(); NSDecimalRound(&output, &input, 2, .bankers); return output }
+    static func format(_ value: Decimal, currency: String) -> String {
+        let formatter = NumberFormatter(); formatter.numberStyle = .currency; formatter.currencyCode = currency
+        return formatter.string(from: NSDecimalNumber(decimal: rounded(value))) ?? "\(value) \(currency)"
+    }
+}
+
+struct InvoiceTotals {
+    let materials: Decimal
+    let labour: Decimal
+    let charges: Decimal
+    let subtotal: Decimal
+    let discount: Decimal
+    let tax: Decimal
+    let grandTotal: Decimal
+    init(items: [PriceItem], discount: Decimal, taxRate: Decimal) {
+        materials = items.filter { $0.kind == .material }.reduce(.zero) { $0 + $1.total }
+        labour = items.filter { $0.kind == .labour }.reduce(.zero) { $0 + $1.total }
+        charges = items.filter { $0.kind == .charge }.reduce(.zero) { $0 + $1.total }
+        subtotal = Money.rounded(materials + labour + charges)
+        self.discount = min(Money.rounded(max(discount, .zero)), subtotal)
+        tax = Money.rounded((subtotal - self.discount) * max(taxRate, .zero) / 100)
+        grandTotal = Money.rounded(subtotal - self.discount + tax)
+    }
+}
+
+enum PhotoStore {
+    static var directory: URL {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("JobPhotos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+    static func save(_ image: UIImage) throws -> String {
+        let filename = UUID().uuidString + ".jpg"
+        guard image.size.width > 0, image.size.height > 0 else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
+        let pixelWidth = CGFloat(image.cgImage?.width ?? Int(image.size.width * image.scale))
+        let pixelHeight = CGFloat(image.cgImage?.height ?? Int(image.size.height * image.scale))
+        let scale = min(1, 2400 / max(pixelWidth, pixelHeight))
+        let target = CGSize(width: pixelWidth * scale, height: pixelHeight * scale)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let prepared = scale < 1 ? UIGraphicsImageRenderer(size: target, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: target)) } : image
+        guard let data = prepared.jpegData(compressionQuality: 0.86) else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
+        try data.write(to: directory.appendingPathComponent(filename), options: .atomic)
+        return filename
+    }
+    static func image(_ filename: String) -> UIImage? {
+        let bundledName: String
+        switch filename {
+        case "sample-before": bundledName = "sample-before-original"
+        case "sample-after": bundledName = "sample-after-original"
+        default: bundledName = filename
+        }
+        return UIImage(contentsOfFile: directory.appendingPathComponent(filename).path) ?? UIImage(named: bundledName)
+    }
+    static func delete(_ filename: String) { try? FileManager.default.removeItem(at: directory.appendingPathComponent(filename)) }
+}
+
+enum SampleJob {
+    static func make() -> Job {
+        let job = Job(number: "FR-DEMO-001", title: "Kitchen Sink Repair", clientName: "Sarah Johnson (sample)", siteAddress: "123 Maple Street (sample)", category: "Plumbing", issue: "Leak reported beneath the kitchen sink at the trap connection.", technician: "Alex Rivera (sample)", businessName: "Rivera Home Services (sample)", currencyCode: "USD", taxRate: "8.25", isSample: true)
+        job.status = .completed
+        job.roughNote = "Replaced damaged connector and tested connection. No leaks observed after installation."
+        job.professionalNote = "The technician replaced the damaged connector at the kitchen sink trap connection and tested the connection after installation. The technician recorded that no further leakage was observed at completion."
+        job.technicianConfirmed = true
+        let before = JobPhoto(kind: .before, filename: "sample-before-original")
+        job.photos = [before, JobPhoto(kind: .after, filename: "sample-after-original", pairedBeforeID: before.id)]
+        job.items = [PriceItem(kind: .material, name: "PVC connector", quantity: "1", unitPrice: "8.50"), PriceItem(kind: .material, name: "Plumber's putty", quantity: "1", unitPrice: "5.00"), PriceItem(kind: .labour, name: "Plumbing labour", quantity: "1", unitPrice: "85.00")]
+        return job
+    }
+}
