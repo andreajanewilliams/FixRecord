@@ -11,6 +11,7 @@
     <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key><true/>
+    <key>UIUserInterfaceStyle</key><string>Light</string>
     <key>NSCameraUsageDescription</key><string>Capture before and after job photos and receipts.</string>
     <key>NSPhotoLibraryUsageDescription</key><string>Import job photos and receipts.</string>
     <key>NSMicrophoneUsageDescription</key><string>Dictate reported issues and work completed notes on this device.</string>
