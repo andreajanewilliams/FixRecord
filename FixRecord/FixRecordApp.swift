@@ -48,7 +48,7 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $selection) {
             NavigationStack {
-                HomeView(jobs: jobs, newJob: $newJob, selectedJob: $selectedJob, selection: $selection)
+                HomeView(jobs: jobs, newJob: $newJob, selectedJob: $selectedJob)
                     .navigationDestination(item: $selectedJob) { JobDetailView(job: $0) }
             }.tabItem { Label("Jobs", systemImage: "house.fill") }.tag(0)
             NavigationStack { TemplatesView() }.tabItem { Label("Templates", systemImage: "doc.text") }.tag(1)
@@ -78,7 +78,6 @@ struct HomeView: View {
     let jobs: [Job]
     @Binding var newJob: Bool
     @Binding var selectedJob: Job?
-    @Binding var selection: Int
     private var visibleJobs: [Job] { jobs.filter { filter == .all || $0.status == filter.status } }
     var body: some View {
         ScrollView {
@@ -87,7 +86,6 @@ struct HomeView: View {
                     Image(systemName: "wrench.adjustable.fill").foregroundStyle(.white).padding(8).background(Brand.navy, in: RoundedRectangle(cornerRadius: 9))
                     Text("FixRecord").font(.headline).foregroundStyle(Brand.navy)
                     Spacer()
-                    Button { selection = 2 } label: { Image(systemName: "gearshape").foregroundStyle(Brand.navy) }.accessibilityLabel("Settings")
                 }
                 HStack {
                     Text("My Jobs").font(.largeTitle.bold()).foregroundStyle(Brand.navy)
