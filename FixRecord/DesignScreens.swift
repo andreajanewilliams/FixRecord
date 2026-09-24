@@ -25,10 +25,10 @@ struct OnboardingView: View {
     private var welcome: some View {
         GeometryReader { geometry in
             ZStack {
-                if let image = PhotoStore.image("sample-before-repair-v2") {
+                if let image = PhotoStore.image("onboarding-workshop-v1") {
                     Image(uiImage: image).resizable().scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                        .blur(radius: 3).overlay(Brand.navy.opacity(0.68))
+                        .overlay(LinearGradient(colors: [Brand.navy.opacity(0.12), Brand.navy.opacity(0.28), Brand.navy.opacity(0.52)], startPoint: .top, endPoint: .bottom))
                 }
                 VStack(spacing: 0) {
                     Spacer(minLength: 35)
