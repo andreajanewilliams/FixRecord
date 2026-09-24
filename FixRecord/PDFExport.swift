@@ -39,16 +39,21 @@ struct ExportView: View {
     @AppStorage("showPhotosInWorkReport") private var showPhotosInWorkReport = true
     @StateObject private var entitlements = EntitlementService.shared
     private var profile: BusinessProfile? { profiles.first }
+    private var renderProfile: BusinessProfile? { job.documentProfile(fallback: profile) }
 
     var body: some View {
         VStack(spacing: 10) {
             Picker("Document", selection: $kind) { ForEach(ExportKind.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).padding(.horizontal)
-            if profile?.businessName.isEmpty != false && !dismissedBusinessPrompt {
+            if renderProfile?.businessName.isEmpty != false && !dismissedBusinessPrompt {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) { Text("Personalise your documents").font(.subheadline.bold()); Text("Add your business details.").font(.caption).foregroundStyle(.secondary) }
                     Spacer()
-                    Button("Add Details") { if profile == nil { context.insert(BusinessProfile()) }; showingBusiness = true }.font(.caption.bold())
+                    if job.documentPreset != nil {
+                        NavigationLink("Add Details") { JobPresetSettingsView(job: job) }.font(.caption.bold())
+                    } else {
+                        Button("Add Details") { if profile == nil { context.insert(BusinessProfile()) }; showingBusiness = true }.font(.caption.bold())
+                    }
                     Button("Not Now") { dismissedBusinessPrompt = true }.font(.caption)
                 }.padding(10).background(Brand.pale, in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal)
             }
@@ -73,16 +78,19 @@ struct ExportView: View {
         .task { await entitlements.refresh(); render() }
         .onChange(of: entitlements.isPro) { _, _ in render() }
         .onChange(of: showPhotosInWorkReport) { _, _ in render() }
+        .onChange(of: job.documentPresetData) { _, _ in render() }
         .onChange(of: showingBusiness) { _, showing in if !showing { render() } }
     }
     private func render() {
         guard kind != .pack || entitlements.isPro else { data = Data(); url = nil; return }
         do {
-            let options = DocumentOptions.load()
-            data = try PDFMaker.make(kind: kind, job: job, profile: profile, options: options, isPro: entitlements.isPro, includePhotos: showPhotosInWorkReport)
+            let options = job.documentOptions
+            let includePhotos = job.includePhotosInReport
+            let business = job.documentProfile(fallback: profile)
+            data = try PDFMaker.make(kind: kind, job: job, profile: business, options: options, isPro: entitlements.isPro, includePhotos: includePhotos)
             url = try exportURL(for: data, label: kind.rawValue)
             if entitlements.isPro {
-                let pack = try PDFMaker.make(kind: .pack, job: job, profile: profile, options: options, isPro: true, includePhotos: showPhotosInWorkReport)
+                let pack = try PDFMaker.make(kind: .pack, job: job, profile: business, options: options, isPro: true, includePhotos: includePhotos)
                 packURL = try exportURL(for: pack, label: "Client Pack")
             } else { packURL = nil }
             error = ""

@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 import PDFKit
+import Observation
 
 struct OnboardingView: View {
     let finish: () -> Void
@@ -156,10 +157,63 @@ struct JobEditView: View {
                     JobFormDivider()
                     JobTextField("Phone", placeholder: "Client phone", text: $job.clientPhone)
                 }
+                NavigationLink { JobPresetSettingsView(job: job) } label: {
+                    HStack { Text("Document preset"); Spacer(); Text(job.documentPreset?.name ?? "Current settings").foregroundStyle(.secondary); Image(systemName: "chevron.right") }
+                }.padding(16).background(.white, in: RoundedRectangle(cornerRadius: 13))
             }.padding(18)
         }.background(Brand.background).navigationTitle("Edit Job").toolbar { Button("Done") { dismiss() } }
             .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: job.category) { job.category = $0 } }
             .onDisappear { job.technicianConfirmed = false }
+    }
+}
+
+struct JobPresetSettingsView: View {
+    @Bindable var job: Job
+    @Query private var profiles: [BusinessProfile]
+    @State private var store = PresetStore.shared
+    @State private var pendingPreset: SavedPreset?
+    @State private var editingPreset: SavedPreset?
+
+    private var profile: BusinessProfile? { profiles.first }
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("This job", value: job.documentPreset?.name ?? "Current settings")
+            } footer: { Text("Applying a preset saves a copy on this job. Later changes to the preset will not alter this job.") }
+            Section("Saved presets") {
+                if store.presets.isEmpty { Text("Create presets in Settings to reuse them here.").foregroundStyle(.secondary) }
+                ForEach(store.presets) { preset in
+                    Button { pendingPreset = preset } label: {
+                        HStack { Text(preset.name); Spacer(); if job.documentPreset?.id == preset.id { Image(systemName: "checkmark").foregroundStyle(Brand.blue) } }
+                    }
+                }
+            }
+            Section {
+                Button("Customise for this job") {
+                    var value = job.documentPreset ?? SavedPreset.custom(profile: profile)
+                    if job.documentPreset == nil {
+                        if !job.businessName.isEmpty { value.business.businessName = job.businessName }
+                        value.business.currencyCode = job.currencyCode
+                        value.business.taxRate = job.taxRate
+                    }
+                    value.name = "Custom"
+                    value.id = UUID()
+                    editingPreset = value
+                }
+            } footer: { Text("Manual changes here affect only this job. Job title, client, notes and photos stay editable on their own screens.") }
+        }.navigationTitle("Job Preset")
+            .alert("Apply preset to this job?", isPresented: Binding(get: { pendingPreset != nil }, set: { if !$0 { pendingPreset = nil } })) {
+                Button("Apply") { if let preset = pendingPreset { job.applyPreset(preset, includeJobDefaults: true) }; pendingPreset = nil }
+                Button("Cancel", role: .cancel) { pendingPreset = nil }
+            } message: { Text("This replaces this job’s branding, document settings, currency, tax rate, and any technician or category set in the preset. Client details and work notes are kept.") }
+            .sheet(item: $editingPreset) { preset in
+                NavigationStack {
+                    PresetEditorView(preset: preset, editName: false) { edited in
+                        job.applyPreset(edited, includeJobDefaults: false)
+                    }
+                }
+            }
     }
 }
 
@@ -224,6 +278,7 @@ struct SettingsView: View {
                 NavigationLink { JobDefaultsView() } label: { Label("Job Defaults", systemImage: "slider.horizontal.3") }
                 NavigationLink { DocumentSettingsView() } label: { Label("Document Settings", systemImage: "slider.horizontal.3") }
                 NavigationLink { TemplatesView() } label: { Label("Templates", systemImage: "doc.text") }
+                NavigationLink { PresetsView(profile: profile) } label: { Label("Saved Presets", systemImage: "square.on.square") }
                 NavigationLink { DataManagementView() } label: { Label("Data Management", systemImage: "externaldrive") }
             }
             Section {
@@ -357,6 +412,39 @@ struct AboutView: View {
 
 enum DocumentTemplate: String, CaseIterable, Codable { case modern = "Modern", minimal = "Minimal", classic = "Classic" }
 
+struct BusinessSnapshot: Codable, Equatable {
+    var businessName = ""
+    var ownerName = ""
+    var email = ""
+    var phone = ""
+    var address = ""
+    var taxNumber = ""
+    var paymentInstructions = ""
+    var currencyCode = "ZAR"
+    var taxRate = "0"
+    var invoicePrefix = "FR"
+    var logoFilename = ""
+
+    init(profile: BusinessProfile?) {
+        guard let profile else { return }
+        businessName = profile.businessName; ownerName = profile.ownerName
+        email = profile.email; phone = profile.phone; address = profile.address
+        taxNumber = profile.taxNumber; paymentInstructions = profile.paymentInstructions
+        currencyCode = profile.currencyCode; taxRate = profile.taxRate
+        invoicePrefix = profile.invoicePrefix; logoFilename = profile.logoFilename
+    }
+
+    func asProfile() -> BusinessProfile {
+        let value = BusinessProfile()
+        value.businessName = businessName; value.ownerName = ownerName
+        value.email = email; value.phone = phone; value.address = address
+        value.taxNumber = taxNumber; value.paymentInstructions = paymentInstructions
+        value.currencyCode = currencyCode; value.taxRate = taxRate
+        value.invoicePrefix = invoicePrefix; value.logoFilename = logoFilename
+        return value
+    }
+}
+
 struct DocumentOptions: Codable, Equatable {
     var template: DocumentTemplate = .modern
     var showLogo = true
@@ -383,6 +471,189 @@ struct DocumentOptions: Codable, Equatable {
         var value = self
         if !isPro { value.template = .modern; value.showLogo = false; value.showFixRecordBranding = true }
         return value
+    }
+}
+
+struct SavedPreset: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    var business: BusinessSnapshot
+    var options: DocumentOptions
+    var includePhotos: Bool
+    var technician = ""
+    var category = ""
+
+    static func custom(profile: BusinessProfile?) -> Self {
+        Self(name: "Custom", business: BusinessSnapshot(profile: profile), options: .load(),
+             includePhotos: UserDefaults.standard.object(forKey: "showPhotosInWorkReport") as? Bool ?? true)
+    }
+}
+
+@Observable final class PresetStore {
+    static let shared = PresetStore()
+    private let storage: UserDefaults
+    private let storageKey = "fixrecord.savedPresets.v1"
+    var presets: [SavedPreset] { didSet { persist() } }
+    var defaultID: UUID? { didSet { persist() } }
+
+    private struct Stored: Codable { var presets: [SavedPreset]; var defaultID: UUID? }
+
+    init(storage: UserDefaults = .standard) {
+        self.storage = storage
+        let saved = storage.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(Stored.self, from: $0) }
+        presets = saved?.presets ?? []
+        defaultID = saved?.defaultID
+    }
+
+    var defaultPreset: SavedPreset? { presets.first { $0.id == defaultID } }
+
+    func save(_ preset: SavedPreset) {
+        let name = preset.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        var value = preset; value.name = name
+        if let index = presets.firstIndex(where: { $0.id == value.id }) { presets[index] = value }
+        else { presets.append(value) }
+    }
+
+    func delete(_ id: UUID) {
+        presets.removeAll { $0.id == id }
+        if defaultID == id { defaultID = nil }
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(Stored(presets: presets, defaultID: defaultID)) else { return }
+        storage.set(data, forKey: storageKey)
+    }
+}
+
+struct PresetsView: View {
+    let profile: BusinessProfile?
+    @State private var store = PresetStore.shared
+    @State private var editing: SavedPreset?
+
+    var body: some View {
+        List {
+            Section("New jobs") {
+                Picker("Default preset", selection: $store.defaultID) {
+                    Text("None").tag(nil as UUID?)
+                    ForEach(store.presets) { preset in Text(preset.name).tag(Optional(preset.id)) }
+                }
+            }
+            Section {
+                ForEach(store.presets) { preset in
+                    Button { editing = preset } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(preset.name).foregroundStyle(Brand.navy)
+                                Text(preset.business.businessName.isEmpty ? preset.options.template.rawValue : "\(preset.business.businessName) · \(preset.options.template.rawValue)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if store.defaultID == preset.id { Text("DEFAULT").font(.caption2.bold()).foregroundStyle(Brand.blue) }
+                        }
+                    }
+                    .swipeActions {
+                        Button("Delete", role: .destructive) { store.delete(preset.id) }
+                    }
+                }
+            } header: { Text("Presets") }
+              footer: { Text("Swipe to delete. Jobs already using a preset keep their saved settings.") }
+            Section {
+                Button { var preset = SavedPreset.custom(profile: profile); preset.name = ""; editing = preset } label: {
+                    Label("Create Preset", systemImage: "plus.circle.fill")
+                }
+            }
+        }.navigationTitle("Saved Presets")
+            .sheet(item: $editing) { preset in NavigationStack { PresetEditorView(preset: preset) { store.save($0) } } }
+    }
+}
+
+struct PresetEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var preset: SavedPreset
+    @StateObject private var entitlements = EntitlementService.shared
+    @State private var selectedLogo: PhotosPickerItem?
+    @State private var showingUpgrade = false
+
+    private let editName: Bool
+    private let onSave: (SavedPreset) -> Void
+
+    init(preset: SavedPreset, editName: Bool = true, onSave: @escaping (SavedPreset) -> Void) {
+        _preset = State(initialValue: preset)
+        self.editName = editName
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        Form {
+            if editName { Section("Preset name") { TextField("e.g. Standard repair", text: $preset.name) } }
+            Section("Business and logo") {
+                if let image = PhotoStore.image(preset.business.logoFilename) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(height: 64)
+                }
+                if entitlements.isPro {
+                    PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images)
+                    if !preset.business.logoFilename.isEmpty { Button("Remove logo") { preset.business.logoFilename = "" } }
+                } else { Button("Choose logo · Pro") { showingUpgrade = true } }
+                TextField("Business name", text: $preset.business.businessName)
+                TextField("Owner / contractor", text: $preset.business.ownerName)
+                TextField("Email", text: $preset.business.email).keyboardType(.emailAddress)
+                TextField("Phone", text: $preset.business.phone).keyboardType(.phonePad)
+                TextField("Address", text: $preset.business.address, axis: .vertical)
+                TextField("Tax / VAT number", text: $preset.business.taxNumber)
+                TextField("Payment instructions", text: $preset.business.paymentInstructions, axis: .vertical)
+                TextField("Currency code", text: $preset.business.currencyCode).textInputAutocapitalization(.characters)
+                TextField("Tax / VAT %", text: $preset.business.taxRate).keyboardType(.decimalPad)
+                TextField("Invoice prefix", text: $preset.business.invoicePrefix)
+            }
+            Section("Job defaults") {
+                TextField("Technician (optional)", text: $preset.technician)
+                TextField("Category (optional)", text: $preset.category)
+            }
+            Section("Document layout") {
+                Picker("Layout", selection: $preset.options.template) {
+                    ForEach(DocumentTemplate.allCases, id: \.self) { layout in Text(layout.rawValue).tag(layout) }
+                }.onChange(of: preset.options.template) { _, layout in
+                    if !entitlements.isPro && layout != .modern { preset.options.template = .modern; showingUpgrade = true }
+                }
+                Toggle("Show business logo", isOn: $preset.options.showLogo).disabled(!entitlements.isPro)
+                Toggle("Show business details", isOn: $preset.options.showBusinessDetails)
+                Toggle("Show FixRecord branding", isOn: $preset.options.showFixRecordBranding).disabled(!entitlements.isPro)
+            }
+            Section("Work report") {
+                Toggle("Show before & after photos", isOn: $preset.includePhotos)
+                Toggle("Show reported issue", isOn: $preset.options.showReportedIssue)
+                Toggle("Show materials used", isOn: $preset.options.showMaterials)
+                Toggle("Show technician confirmation", isOn: $preset.options.showTechnicianConfirmation)
+                Toggle("Show client acknowledgement", isOn: $preset.options.showClientAcknowledgement)
+                Toggle("Show additional notes", isOn: $preset.options.showAdditionalNotes)
+                Toggle("Show prices", isOn: $preset.options.showPricesInReport)
+            }
+            Section("Invoice") {
+                Toggle("Show due date", isOn: $preset.options.showDueDate)
+                Toggle("Show Tax / VAT", isOn: $preset.options.showTax)
+                Toggle("Show payment instructions", isOn: $preset.options.showPaymentInstructions)
+                Toggle("Show terms & notes", isOn: $preset.options.showTerms)
+                Toggle("Show discount", isOn: $preset.options.showDiscount)
+            }
+        }.navigationTitle(editName ? (preset.name.isEmpty ? "New Preset" : "Edit Preset") : "Customise Job")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { onSave(preset); dismiss() }
+                        .disabled(editName && preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
+            .task { await entitlements.refresh() }
+            .onChange(of: selectedLogo) { _, item in
+                Task {
+                    if entitlements.isPro, let data = try? await item?.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data), let name = try? PhotoStore.save(image) {
+                        preset.business.logoFilename = name
+                    }
+                }
+            }
     }
 }
 

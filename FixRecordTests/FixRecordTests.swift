@@ -318,6 +318,75 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(loaded.photos.count, 2)
         XCTAssertEqual(loaded.items.count, 5)
     }
+
+    func testSavedPresetsPersistAndDeletingDefaultDoesNotChangeJob() throws {
+        let suite = "FixRecordPresetTests.\(UUID().uuidString)"
+        let storage = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { storage.removePersistentDomain(forName: suite) }
+        let store = PresetStore(storage: storage)
+        var preset = SavedPreset.custom(profile: nil)
+        preset.name = "Inspection"
+        preset.business.businessName = "Andrea Services"
+        preset.options.showMaterials = false
+        store.save(preset)
+        store.defaultID = preset.id
+
+        let job = SampleJob.make()
+        job.applyPreset(preset, includeJobDefaults: false)
+        var changed = preset
+        changed.business.businessName = "Later Name"
+        store.save(changed)
+        store.delete(preset.id)
+
+        let reopened = PresetStore(storage: storage)
+        XCTAssertNil(reopened.defaultPreset)
+        XCTAssertTrue(reopened.presets.isEmpty)
+        XCTAssertEqual(job.documentPreset?.business.businessName, "Andrea Services")
+        XCTAssertFalse(job.documentOptions.showMaterials)
+    }
+
+    func testJobPresetSnapshotSurvivesSaveAndExportsItsOwnSettings() throws {
+        let container = try ModelContainer(for: Job.self, BusinessProfile.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let writer = ModelContext(container)
+        let job = SampleJob.make()
+        var preset = SavedPreset.custom(profile: nil)
+        preset.name = "No photos"
+        preset.business.businessName = "Andrea Repairs"
+        preset.business.phone = "012 345 6789"
+        preset.includePhotos = false
+        preset.options.showMaterials = false
+        preset.technician = "Andrea Williams"
+        preset.category = "Inspection"
+        job.applyPreset(preset, includeJobDefaults: true)
+        writer.insert(job)
+        try writer.save()
+
+        let loaded = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<Job>()).first)
+        XCTAssertEqual(loaded.technician, "Andrea Williams")
+        XCTAssertEqual(loaded.category, "Inspection")
+        XCTAssertFalse(loaded.includePhotosInReport)
+        XCTAssertEqual(loaded.documentProfile(fallback: nil)?.businessName, "Andrea Repairs")
+        let data = try PDFMaker.make(kind: .report, job: loaded, profile: loaded.documentProfile(fallback: nil),
+                                     options: loaded.documentOptions, isPro: true, includePhotos: loaded.includePhotosInReport)
+        let pdf = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertTrue((pdf.string ?? "").contains("Andrea Repairs"))
+        XCTAssertFalse((pdf.string ?? "").contains("MATERIALS USED"))
+    }
+
+    func testApplyingPresetDoesNotReplaceClientOrWorkNotes() {
+        let job = SampleJob.make()
+        let client = job.clientName
+        let issue = job.issue
+        let notes = job.professionalNote
+        var preset = SavedPreset.custom(profile: nil)
+        preset.technician = "Andrea Williams"
+        preset.category = "Inspection"
+        job.applyPreset(preset, includeJobDefaults: true)
+        XCTAssertEqual(job.clientName, client)
+        XCTAssertEqual(job.issue, issue)
+        XCTAssertEqual(job.professionalNote, notes)
+    }
+
     func testPhotoFileRoundTrip() throws {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 3000, height: 1000)).image { context in UIColor.green.setFill(); context.fill(CGRect(x: 0, y: 0, width: 3000, height: 1000)) }
         let filename = try PhotoStore.save(image)

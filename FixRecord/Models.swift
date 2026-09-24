@@ -170,6 +170,7 @@ struct ReceiptRecord: Codable, Identifiable {
     var photosData: Data
     var itemsData: Data
     var receiptsData: Data
+    var documentPresetData: Data?
     var isSample: Bool
 
     init(number: String, title: String, clientName: String, siteAddress: String, category: String, issue: String, technician: String, businessName: String, currencyCode: String, taxRate: String, isSample: Bool = false) {
@@ -179,12 +180,33 @@ struct ReceiptRecord: Codable, Identifiable {
         createdAt = Date(); completedAt = nil; statusRaw = JobStatus.draft.rawValue
         roughNote = ""; professionalNote = ""; invoiceNotes = ""; self.currencyCode = currencyCode
         self.taxRate = taxRate; discount = "0"; dueDate = Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date()
-        paid = false; technicianConfirmed = false; photosData = Data(); itemsData = Data(); receiptsData = Data(); self.isSample = isSample
+        paid = false; technicianConfirmed = false; photosData = Data(); itemsData = Data(); receiptsData = Data(); documentPresetData = nil; self.isSample = isSample
     }
     var status: JobStatus { get { JobStatus(rawValue: statusRaw) ?? .draft } set { statusRaw = newValue.rawValue; completedAt = newValue == .completed ? Date() : nil; if newValue != .completed { technicianConfirmed = false } } }
     var photos: [JobPhoto] { get { (try? JSONDecoder().decode([JobPhoto].self, from: photosData)) ?? [] } set { photosData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
     var items: [PriceItem] { get { (try? JSONDecoder().decode([PriceItem].self, from: itemsData)) ?? [] } set { itemsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
     var receipts: [ReceiptRecord] { get { (try? JSONDecoder().decode([ReceiptRecord].self, from: receiptsData)) ?? [] } set { receiptsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
+    var documentPreset: SavedPreset? {
+        get { documentPresetData.flatMap { try? JSONDecoder().decode(SavedPreset.self, from: $0) } }
+        set { documentPresetData = newValue.flatMap { try? JSONEncoder().encode($0) } }
+    }
+    var documentOptions: DocumentOptions { documentPreset?.options ?? .load() }
+    var includePhotosInReport: Bool {
+        documentPreset?.includePhotos ?? (UserDefaults.standard.object(forKey: "showPhotosInWorkReport") as? Bool ?? true)
+    }
+    func documentProfile(fallback: BusinessProfile?) -> BusinessProfile? {
+        documentPreset?.business.asProfile() ?? fallback
+    }
+    func applyPreset(_ preset: SavedPreset, includeJobDefaults: Bool) {
+        documentPreset = preset
+        businessName = preset.business.businessName
+        currencyCode = preset.business.currencyCode
+        taxRate = preset.business.taxRate
+        if includeJobDefaults {
+            if !preset.technician.isEmpty { technician = preset.technician }
+            if !preset.category.isEmpty { category = preset.category }
+        }
+    }
     var summary: String { professionalNote.isEmpty ? roughNote : professionalNote }
 }
 

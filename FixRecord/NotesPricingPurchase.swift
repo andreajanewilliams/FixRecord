@@ -62,7 +62,7 @@ struct NotesView: View {
 
 struct PricingView: View {
     @Bindable var job: Job
-    private var documentOptions: DocumentOptions { DocumentOptions.load() }
+    private var documentOptions: DocumentOptions { job.documentOptions }
     private var totals: InvoiceTotals { InvoiceTotals(items: job.items, discount: documentOptions.showDiscount ? Money.parse(job.discount) : 0, taxRate: documentOptions.showTax ? Money.parse(job.taxRate) : 0) }
     private var valid: Bool { Money.isValid(job.discount) && Money.isValid(job.taxRate) && job.items.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && Money.isValid($0.quantity) && Money.isValid($0.unitPrice) } }
     var body: some View {

@@ -137,6 +137,8 @@ struct CreateJobView: View {
     let profile: BusinessProfile?
     let onCreate: (Job) -> Void
     @State private var defaults = JobDefaultsService.shared
+    @State private var presets = PresetStore.shared
+    @State private var chosenPreset: SavedPreset?
     @State private var client = ""
     @State private var address = ""
     @State private var title = ""
@@ -152,6 +154,32 @@ struct CreateJobView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if !presets.presets.isEmpty {
+                    JobFormHeading("Start with")
+                    JobFormCard {
+                        Menu {
+                            Button("Custom / no preset") {
+                                chosenPreset = nil
+                                technician = defaults.technician(for: profile)
+                                category = defaults.category()
+                            }
+                            ForEach(presets.presets) { preset in
+                                Button(preset.name) {
+                                    chosenPreset = preset
+                                    technician = preset.technician.isEmpty ? defaults.technician(for: profile) : preset.technician
+                                    category = preset.category.isEmpty ? defaults.category() : preset.category
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Text("Preset").foregroundStyle(Brand.navy)
+                                Spacer()
+                                Text(chosenPreset?.name ?? "Custom").foregroundStyle(Brand.blue)
+                                Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 JobFormHeading("Job")
                 JobFormCard {
                     JobTextField("Job title", placeholder: "e.g. Kitchen Sink Repair", text: $title)
@@ -207,14 +235,21 @@ struct CreateJobView: View {
                 defaults.bootstrap(from: jobs)
                 technician = defaults.technician(for: profile)
                 category = defaults.category()
+                if let preset = presets.defaultPreset {
+                    chosenPreset = preset
+                    if !preset.technician.isEmpty { technician = preset.technician }
+                    if !preset.category.isEmpty { category = preset.category }
+                }
                 didPrefill = true
             }
     }
     private func save() {
-        let prefix = profile?.invoicePrefix.isEmpty == false ? profile!.invoicePrefix : "FR"
+        let selectedPrefix = chosenPreset?.business.invoicePrefix ?? profile?.invoicePrefix ?? ""
+        let prefix = selectedPrefix.isEmpty ? "FR" : selectedPrefix
         let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))"
         let job = Job(number: number, title: title.trimmingCharacters(in: .whitespacesAndNewlines), clientName: client.trimmingCharacters(in: .whitespacesAndNewlines), siteAddress: address.trimmingCharacters(in: .whitespacesAndNewlines), category: category, issue: issue.trimmingCharacters(in: .whitespacesAndNewlines), technician: technician.trimmingCharacters(in: .whitespacesAndNewlines), businessName: profile?.businessName ?? "", currencyCode: profile?.currencyCode ?? "ZAR", taxRate: profile?.taxRate ?? "0")
         job.createdAt = date
+        job.applyPreset(chosenPreset ?? SavedPreset.custom(profile: profile), includeJobDefaults: false)
         context.insert(job)
         do {
             try context.save()
@@ -350,6 +385,7 @@ struct JobDetailView: View {
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }
                 NavigationLink { ReceiptView(job: job) } label: { feature("Scan Receipt", subtitle: "Review suggestions before adding", icon: "doc.viewfinder") }
+                NavigationLink { JobPresetSettingsView(job: job) } label: { feature("Document Preset", subtitle: job.documentPreset?.name ?? "Current settings", icon: "square.on.square") }
                 NavigationLink { ExportView(job: job) } label: { feature("Preview & Export", subtitle: "Work report, invoice or client pack", icon: "doc.richtext") }
                 if job.status == .completed { Toggle("I confirm this work record", isOn: $job.technicianConfirmed).font(.subheadline) }
             }.padding()
