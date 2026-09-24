@@ -74,6 +74,7 @@ struct VoiceTextInput: View {
     let title: String
     let placeholder: String
     @Binding var text: String
+    var minEditorHeight: CGFloat = 95
     @StateObject private var speech = SpeechInputService()
     @State private var initialText = ""
 
@@ -95,7 +96,7 @@ struct VoiceTextInput: View {
             }
             ZStack(alignment: .topLeading) {
                 if text.isEmpty { Text(placeholder).foregroundStyle(.secondary).padding(.top, 8).padding(.leading, 5) }
-                TextEditor(text: $text).frame(minHeight: 95)
+                TextEditor(text: $text).scrollContentBackground(.hidden).frame(minHeight: minEditorHeight)
             }
             if !speech.message.isEmpty { Text(speech.message).font(.caption).foregroundStyle(speech.listening ? Brand.blue : .secondary) }
         }.onDisappear { speech.stop() }

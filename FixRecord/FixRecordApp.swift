@@ -42,6 +42,7 @@ struct RootView: View {
     @AppStorage("didCompleteOnboarding") private var didCompleteOnboarding = false
     @State private var newJob = false
     @State private var selectedJob: Job?
+    @State private var pendingJob: Job?
     @State private var selection = 0
     var profile: BusinessProfile? { profiles.first }
     var body: some View {
@@ -53,7 +54,9 @@ struct RootView: View {
             NavigationStack { TemplatesView() }.tabItem { Label("Templates", systemImage: "doc.text") }.tag(1)
             NavigationStack { SettingsView(profile: profile) }.tabItem { Label("Settings", systemImage: "gearshape") }.tag(2)
         }
-        .sheet(isPresented: $newJob) { NavigationStack { CreateJobView(profile: profile) { job in selectedJob = job } } }
+        .fullScreenCover(isPresented: $newJob, onDismiss: {
+            if let pendingJob { selectedJob = pendingJob; self.pendingJob = nil }
+        }) { NavigationStack { CreateJobView(profile: profile) { job in pendingJob = job; newJob = false } } }
         .fullScreenCover(isPresented: Binding(get: { !didCompleteOnboarding && !ProcessInfo.processInfo.arguments.contains("-skip-onboarding") }, set: { if !$0 { didCompleteOnboarding = true } })) {
             OnboardingView {
                 didCompleteOnboarding = true
@@ -132,30 +135,196 @@ struct JobRow: View {
 struct CreateJobView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Query(sort: \Job.createdAt, order: .reverse) private var jobs: [Job]
     let profile: BusinessProfile?
     let onCreate: (Job) -> Void
+    @State private var defaults = JobDefaultsService.shared
     @State private var client = ""
     @State private var address = ""
     @State private var title = ""
     @State private var issue = ""
     @State private var technician = ""
-    @State private var category = "Maintenance"
+    @State private var category = ""
     @State private var date = Date()
-    private let categories = ["Plumbing", "Electrical", "HVAC", "Carpentry", "Painting", "Installation", "Maintenance", "Inspection", "Other"]
+    @State private var showingCategory = false
+    @State private var createdJob: Job?
+    @State private var saveError = ""
+    @State private var didPrefill = false
+    @FocusState private var technicianFocused: Bool
     var body: some View {
-        Form {
-            Section("Job") { TextField("Job title", text: $title); TextField("Client name", text: $client); TextField("Property / Site (optional)", text: $address); DatePicker("Date", selection: $date, displayedComponents: .date) }
-            Section("Work") { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $issue); TextField("Contractor / technician", text: $technician); Picker("Category", selection: $category) { ForEach(categories, id: \.self) { Text($0) } } }
-            Section { PrimaryButton(title: "Save Job", icon: "checkmark") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty) }
-        }.navigationTitle("New Job").navigationBarTitleDisplayMode(.inline)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                JobFormHeading("Job")
+                JobFormCard {
+                    JobTextField("Job title", placeholder: "e.g. Kitchen Sink Repair", text: $title)
+                    JobFormDivider()
+                    JobTextField("Client name", placeholder: "e.g. Sarah Mitchell", text: $client)
+                    JobFormDivider()
+                    JobTextField("Property / Site (optional)", placeholder: "e.g. 12 Oak Avenue", text: $address)
+                    JobFormDivider()
+                    DatePicker("Date", selection: $date, displayedComponents: .date).font(.subheadline).foregroundStyle(Brand.navy)
+                }
+                JobFormHeading("Work")
+                JobFormCard {
+                    VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $issue, minEditorHeight: 58)
+                    JobFormDivider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Contractor / technician").font(.subheadline).foregroundStyle(Brand.navy)
+                        TextField("e.g. Alex Turner", text: $technician).focused($technicianFocused)
+                            .textContentType(.name).font(.body).foregroundStyle(Brand.navy)
+                        if technicianFocused {
+                            let suggestions = defaults.state.recentTechnicians.filter { $0.caseInsensitiveCompare(technician) != .orderedSame }
+                            if !suggestions.isEmpty {
+                                Text("Recent").font(.caption).foregroundStyle(.secondary)
+                                ForEach(suggestions, id: \.self) { name in
+                                    Button(name) { technician = name; technicianFocused = false }.font(.subheadline)
+                                }
+                            }
+                        }
+                    }
+                    JobFormDivider()
+                    Button { showingCategory = true; technicianFocused = false } label: {
+                        HStack {
+                            Text("Category").foregroundStyle(Brand.navy)
+                            Spacer()
+                            Text(category.isEmpty ? "Select category" : category).foregroundStyle(Brand.blue)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        }.font(.subheadline)
+                    }.buttonStyle(.plain)
+                }
+            }.padding(18)
+        }.background(Brand.background).navigationTitle("New Job").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                PrimaryButton(title: "Continue to Photos", icon: "camera") { save() }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+                    .padding(.horizontal, 18).padding(.vertical, 10).background(Brand.background)
+            }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-            .onAppear { technician = profile?.ownerName ?? "" }
+            .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: category) { category = $0 } }
+            .navigationDestination(item: $createdJob) { job in JobPhotoStep(job: job) { onCreate(job) } }
+            .alert("Could not save job", isPresented: Binding(get: { !saveError.isEmpty }, set: { if !$0 { saveError = "" } })) { Button("OK", role: .cancel) { saveError = "" } } message: { Text(saveError) }
+            .onAppear {
+                guard !didPrefill else { return }
+                defaults.bootstrap(from: jobs)
+                technician = defaults.technician(for: profile)
+                category = defaults.category()
+                didPrefill = true
+            }
     }
     private func save() {
         let prefix = profile?.invoicePrefix.isEmpty == false ? profile!.invoicePrefix : "FR"
         let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))"
-        let job = Job(number: number, title: title, clientName: client, siteAddress: address, category: category, issue: issue, technician: technician, businessName: profile?.businessName ?? "", currencyCode: profile?.currencyCode ?? "ZAR", taxRate: profile?.taxRate ?? "0")
-        job.createdAt = date; context.insert(job); try? context.save(); dismiss(); onCreate(job)
+        let job = Job(number: number, title: title.trimmingCharacters(in: .whitespacesAndNewlines), clientName: client.trimmingCharacters(in: .whitespacesAndNewlines), siteAddress: address.trimmingCharacters(in: .whitespacesAndNewlines), category: category, issue: issue.trimmingCharacters(in: .whitespacesAndNewlines), technician: technician.trimmingCharacters(in: .whitespacesAndNewlines), businessName: profile?.businessName ?? "", currencyCode: profile?.currencyCode ?? "ZAR", taxRate: profile?.taxRate ?? "0")
+        job.createdAt = date
+        context.insert(job)
+        do {
+            try context.save()
+            defaults.remember(technician: job.technician, category: job.category)
+            createdJob = job
+        } catch {
+            context.delete(job)
+            saveError = error.localizedDescription
+        }
+    }
+}
+
+struct JobFormHeading: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+    var body: some View { Text(title).font(.headline).foregroundStyle(.secondary).padding(.leading, 10).padding(.top, 8) }
+}
+
+struct JobFormCard<Content: View>: View {
+    @ViewBuilder let content: Content
+    var body: some View { VStack(alignment: .leading, spacing: 14) { content }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(.white, in: RoundedRectangle(cornerRadius: 18)) }
+}
+
+struct JobFormDivider: View {
+    var body: some View { Divider().overlay(Brand.pale) }
+}
+
+struct JobTextField: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    init(_ title: String, placeholder: String, text: Binding<String>) { self.title = title; self.placeholder = placeholder; _text = text }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.subheadline).foregroundStyle(Brand.navy)
+            TextField(placeholder, text: $text).font(.body).foregroundStyle(Brand.navy)
+        }
+    }
+}
+
+struct CategorySelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var defaults = JobDefaultsService.shared
+    @State private var selected = ""
+    @State private var customName = ""
+    @State private var error = ""
+    let value: String
+    let onSelect: (String) -> Void
+    private var known: Bool { JobCategories.builtIn.contains(value) || defaults.state.customCategories.contains(value) }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    categoryRow("No category", value: "")
+                    ForEach(JobCategories.builtIn, id: \.self) { categoryRow($0, value: $0) }
+                    if !defaults.state.customCategories.isEmpty {
+                        Text("Custom Categories").font(.caption).foregroundStyle(.secondary).padding(.top, 20).padding(.bottom, 7)
+                        ForEach(defaults.state.customCategories, id: \.self) { categoryRow($0, value: $0) }
+                    }
+                    if !value.isEmpty && !known { categoryRow(value, value: value) }
+                    categoryRow("Other", value: "Other")
+                    if selected == "Other" {
+                        TextField("Custom category", text: $customName).textInputAutocapitalization(.words)
+                            .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 12)
+                        Text("Add your own category if it’s not listed.").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
+                    }
+                }.padding(18)
+            }.background(Brand.background).navigationTitle("Select Category").navigationBarTitleDisplayMode(.inline)
+                .safeAreaInset(edge: .bottom) { PrimaryButton(title: "Done", icon: "checkmark") { finish() }.padding(18).background(Brand.background) }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }.presentationDetents([.fraction(0.8), .large])
+            .onAppear { selected = value }
+            .alert("Choose another name", isPresented: Binding(get: { !error.isEmpty }, set: { if !$0 { error = "" } })) { Button("OK", role: .cancel) { error = "" } } message: { Text(error) }
+    }
+    private func categoryRow(_ title: String, value: String) -> some View {
+        VStack(spacing: 0) {
+            Button { selected = value } label: {
+                HStack { Text(title); Spacer(); if selected == value { Image(systemName: "checkmark").fontWeight(.bold).foregroundStyle(Brand.blue) } }
+                    .foregroundStyle(selected == value ? Brand.blue : Brand.navy)
+                    .padding(.horizontal, 12).padding(.vertical, 13)
+                    .background(selected == value ? Brand.pale : .white, in: RoundedRectangle(cornerRadius: 9))
+            }.buttonStyle(.plain)
+            Divider().padding(.leading, 12)
+        }
+    }
+    private func finish() {
+        if selected == "Other" {
+            guard let value = defaults.addCustomCategory(customName) else { error = "Enter a category name that is not ‘Other’."; return }
+            onSelect(value)
+        } else { onSelect(selected) }
+        dismiss()
+    }
+}
+
+struct JobPhotoStep: View {
+    let job: Job
+    let onDone: () -> Void
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Image(systemName: "camera.fill").font(.largeTitle).foregroundStyle(Brand.blue).padding(18).background(Brand.pale, in: RoundedRectangle(cornerRadius: 18))
+                Text("Add photos when useful").font(.title2.bold()).foregroundStyle(Brand.navy)
+                Text("Your job is saved. You can capture before and after photos now, or continue without them.").foregroundStyle(.secondary)
+                NavigationLink { PhotoCaptureView(job: job, kind: .before) } label: { Label("Capture Before", systemImage: "camera").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.bordered)
+                NavigationLink { PhotoCaptureView(job: job, kind: .after) } label: { Label("Capture After", systemImage: "camera.fill").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.bordered)
+            }.padding(22)
+        }.background(Brand.background).navigationTitle("Photos").navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
+            .safeAreaInset(edge: .bottom) { PrimaryButton(title: job.photos.isEmpty ? "Continue without Photos" : "Finish Job", icon: "checkmark") { onDone() }.padding(18).background(Brand.background) }
     }
 }
 

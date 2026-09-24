@@ -1,6 +1,114 @@
 import Foundation
 import SwiftData
 import UIKit
+import Observation
+
+enum JobCategories {
+    static let builtIn = ["Plumbing", "Electrical", "HVAC", "Installation", "Carpentry", "Painting", "Maintenance", "Inspection"]
+}
+
+enum DefaultCategoryMode: String, Codable, CaseIterable {
+    case none, lastUsed, selected
+}
+
+struct JobDefaultsState: Codable, Equatable {
+    var hasRecordedJob = false
+    var defaultTechnician = ""
+    var categoryMode: DefaultCategoryMode = .lastUsed
+    var selectedCategory = ""
+    var lastUsedTechnician = ""
+    var lastUsedCategory = ""
+    var recentTechnicians: [String] = []
+    var customCategories: [String] = []
+}
+
+@Observable final class JobDefaultsService {
+    static let shared = JobDefaultsService()
+    private let storage: UserDefaults
+    private let storageKey = "fixrecord.jobDefaults.v1"
+    var state: JobDefaultsState {
+        didSet { if let data = try? JSONEncoder().encode(state) { storage.set(data, forKey: storageKey) } }
+    }
+
+    init(storage: UserDefaults = .standard) {
+        self.storage = storage
+        state = (storage.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(JobDefaultsState.self, from: $0) }) ?? JobDefaultsState()
+    }
+
+    func technician(for profile: BusinessProfile?) -> String {
+        let choices = [state.defaultTechnician, profile?.ownerName ?? "", state.lastUsedTechnician]
+        return choices.map(Self.cleaned).first(where: { !$0.isEmpty }) ?? ""
+    }
+
+    func category() -> String {
+        switch state.categoryMode {
+        case .none: return ""
+        case .lastUsed: return selectable(state.lastUsedCategory) ? state.lastUsedCategory : ""
+        case .selected: return selectable(state.selectedCategory) ? state.selectedCategory : ""
+        }
+    }
+
+    func remember(technician: String, category: String) {
+        let name = Self.cleaned(technician)
+        let category = Self.cleaned(category)
+        state.hasRecordedJob = true
+        if !name.isEmpty {
+            state.lastUsedTechnician = name
+            state.recentTechnicians.removeAll { Self.same($0, name) }
+            state.recentTechnicians.insert(name, at: 0)
+            state.recentTechnicians = Array(state.recentTechnicians.prefix(6))
+        }
+        state.lastUsedCategory = selectable(category) ? category : ""
+    }
+
+    func bootstrap(from jobs: [Job]) {
+        guard !state.hasRecordedJob, let latest = jobs.filter({ !$0.isSample }).max(by: { $0.createdAt < $1.createdAt }) else { return }
+        let category = Self.cleaned(latest.category)
+        if !category.isEmpty && !JobCategories.builtIn.contains(where: { Self.same($0, category) }) {
+            _ = addCustomCategory(category)
+        }
+        remember(technician: latest.technician, category: category)
+    }
+
+    @discardableResult func addCustomCategory(_ name: String) -> String? {
+        let name = Self.cleaned(name)
+        guard !name.isEmpty else { return nil }
+        if let builtIn = JobCategories.builtIn.first(where: { Self.same($0, name) }) { return builtIn }
+        if let existing = state.customCategories.first(where: { Self.same($0, name) }) { return existing }
+        guard !Self.same(name, "Other") else { return nil }
+        state.customCategories.append(name)
+        return name
+    }
+
+    @discardableResult func renameCustomCategory(_ old: String, to new: String) -> Bool {
+        let new = Self.cleaned(new)
+        guard let index = state.customCategories.firstIndex(where: { Self.same($0, old) }),
+              !new.isEmpty, !Self.same(new, "Other"),
+              !JobCategories.builtIn.contains(where: { Self.same($0, new) }),
+              !state.customCategories.enumerated().contains(where: { $0.offset != index && Self.same($0.element, new) }) else { return false }
+        let previous = state.customCategories[index]
+        state.customCategories[index] = new
+        if Self.same(state.selectedCategory, previous) { state.selectedCategory = new }
+        if Self.same(state.lastUsedCategory, previous) { state.lastUsedCategory = new }
+        return true
+    }
+
+    func deleteCustomCategory(_ name: String) {
+        guard let index = state.customCategories.firstIndex(where: { Self.same($0, name) }) else { return }
+        let removed = state.customCategories.remove(at: index)
+        if Self.same(state.selectedCategory, removed) {
+            state.selectedCategory = ""
+            state.categoryMode = .lastUsed
+        }
+        if Self.same(state.lastUsedCategory, removed) { state.lastUsedCategory = "" }
+    }
+
+    private func selectable(_ name: String) -> Bool {
+        JobCategories.builtIn.contains(where: { Self.same($0, name) }) || state.customCategories.contains(where: { Self.same($0, name) })
+    }
+    private static func cleaned(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private static func same(_ first: String, _ second: String) -> Bool { first.caseInsensitiveCompare(second) == .orderedSame }
+}
 
 enum JobStatus: String, CaseIterable, Codable { case draft = "Draft", inProgress = "In Progress", completed = "Completed" }
 enum PhotoKind: String, Codable { case before, after }

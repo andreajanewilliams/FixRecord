@@ -5,6 +5,110 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    private func isolatedDefaults() -> (JobDefaultsService, UserDefaults) {
+        let suite = "FixRecordTests.\(UUID().uuidString)"
+        let storage = UserDefaults(suiteName: suite)!
+        addTeardownBlock { storage.removePersistentDomain(forName: suite) }
+        return (JobDefaultsService(storage: storage), storage)
+    }
+
+    func testFirstJobHasNoCategoryOrTechnicianDefault() {
+        let (defaults, _) = isolatedDefaults()
+        XCTAssertEqual(defaults.category(), "")
+        XCTAssertEqual(defaults.technician(for: nil), "")
+    }
+
+    func testLastUsedCategoryAndTechnicianPersistAcrossLaunches() {
+        let (defaults, storage) = isolatedDefaults()
+        defaults.remember(technician: "Alex Turner", category: "Plumbing")
+        let reopened = JobDefaultsService(storage: storage)
+        XCTAssertEqual(reopened.category(), "Plumbing")
+        XCTAssertEqual(reopened.technician(for: nil), "Alex Turner")
+        XCTAssertEqual(reopened.state.recentTechnicians, ["Alex Turner"])
+    }
+
+    func testExistingJobsSeedDefaultsOnceWithoutUsingSampleData() {
+        let (defaults, _) = isolatedDefaults()
+        let sample = SampleJob.make()
+        defaults.bootstrap(from: [sample])
+        XCTAssertEqual(defaults.category(), "")
+        let existing = SampleJob.make()
+        existing.isSample = false
+        existing.category = "Appliance Repair"
+        existing.technician = "Alex Turner"
+        defaults.bootstrap(from: [existing, sample])
+        XCTAssertEqual(defaults.category(), "Appliance Repair")
+        XCTAssertEqual(defaults.technician(for: nil), "Alex Turner")
+        XCTAssertEqual(defaults.state.customCategories, ["Appliance Repair"])
+        existing.category = "Plumbing"
+        defaults.bootstrap(from: [existing])
+        XCTAssertEqual(defaults.category(), "Appliance Repair")
+    }
+
+    func testExplicitDefaultsOutrankBusinessProfileAndOneOffJobValues() {
+        let (defaults, _) = isolatedDefaults()
+        let profile = BusinessProfile()
+        profile.ownerName = "Alex Turner"
+        defaults.remember(technician: "James Wilson", category: "Electrical")
+        XCTAssertEqual(defaults.technician(for: profile), "Alex Turner")
+        defaults.state.defaultTechnician = "Sarah Ngwenya"
+        defaults.state.selectedCategory = "Maintenance"
+        defaults.state.categoryMode = .selected
+        defaults.remember(technician: "James Wilson", category: "Plumbing")
+        XCTAssertEqual(defaults.technician(for: profile), "Sarah Ngwenya")
+        XCTAssertEqual(defaults.category(), "Maintenance")
+        XCTAssertEqual(defaults.state.lastUsedCategory, "Plumbing")
+    }
+
+    func testCategoryModeCanBeNoneOrLastUsed() {
+        let (defaults, _) = isolatedDefaults()
+        defaults.remember(technician: "", category: "HVAC")
+        defaults.state.categoryMode = .none
+        XCTAssertEqual(defaults.category(), "")
+        defaults.state.categoryMode = .lastUsed
+        XCTAssertEqual(defaults.category(), "HVAC")
+    }
+
+    func testCustomCategoryCanBecomeDefaultAndSurvivesRename() {
+        let (defaults, _) = isolatedDefaults()
+        XCTAssertEqual(defaults.addCustomCategory("Appliance Repair"), "Appliance Repair")
+        XCTAssertEqual(defaults.state.customCategories, ["Appliance Repair"])
+        defaults.state.categoryMode = .selected
+        defaults.state.selectedCategory = "Appliance Repair"
+        XCTAssertEqual(defaults.category(), "Appliance Repair")
+        XCTAssertTrue(defaults.renameCustomCategory("Appliance Repair", to: "Appliance Service"))
+        XCTAssertEqual(defaults.category(), "Appliance Service")
+        XCTAssertFalse(defaults.renameCustomCategory("Appliance Service", to: "Plumbing"))
+    }
+
+    func testDeletingCustomCategoryKeepsHistoricalJobValue() {
+        let (defaults, _) = isolatedDefaults()
+        let job = SampleJob.make()
+        job.category = defaults.addCustomCategory("Appliance Repair")!
+        defaults.remember(technician: job.technician, category: job.category)
+        defaults.state.categoryMode = .selected
+        defaults.state.selectedCategory = job.category
+        defaults.deleteCustomCategory("Appliance Repair")
+        XCTAssertEqual(job.category, "Appliance Repair")
+        XCTAssertEqual(defaults.state.categoryMode, .lastUsed)
+        XCTAssertEqual(defaults.category(), "")
+        XCTAssertTrue(defaults.state.customCategories.isEmpty)
+    }
+
+    func testExistingJobKeepsItsOwnCategoryAndTechnician() {
+        let (defaults, _) = isolatedDefaults()
+        let job = SampleJob.make()
+        job.category = "Inspection"
+        job.technician = "Alex Turner"
+        defaults.state.defaultTechnician = "James Wilson"
+        defaults.state.selectedCategory = "Plumbing"
+        defaults.state.categoryMode = .selected
+        _ = defaults.technician(for: nil)
+        _ = defaults.category()
+        XCTAssertEqual(job.technician, "Alex Turner")
+        XCTAssertEqual(job.category, "Inspection")
+    }
+
     func testDecimalInvoiceTotals() {
         let items = [PriceItem(kind: .material, name: "Part", quantity: "3", unitPrice: "8.50"), PriceItem(kind: .labour, name: "Labour", quantity: "1.5", unitPrice: "80")]
         let totals = InvoiceTotals(items: items, discount: Decimal(5), taxRate: Decimal(15))

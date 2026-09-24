@@ -126,12 +126,39 @@ struct OnboardingView: View {
 struct JobEditView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var job: Job
+    @State private var showingCategory = false
     var body: some View {
-        Form {
-            Section("Job") { TextField("Job title", text: $job.title); TextField("Client name", text: $job.clientName); TextField("Property / Site", text: $job.siteAddress); DatePicker("Date", selection: $job.createdAt, displayedComponents: .date) }
-            Section("Work") { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue); TextField("Contractor / technician", text: $job.technician); TextField("Category", text: $job.category) }
-            Section("Client contact") { TextField("Email", text: $job.clientEmail).keyboardType(.emailAddress); TextField("Phone", text: $job.clientPhone).keyboardType(.phonePad) }
-        }.navigationTitle("Edit Job").toolbar { Button("Done") { dismiss() } }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                JobFormHeading("Job")
+                JobFormCard {
+                    JobTextField("Job title", placeholder: "e.g. Kitchen Sink Repair", text: $job.title)
+                    JobFormDivider()
+                    JobTextField("Client name", placeholder: "e.g. Sarah Mitchell", text: $job.clientName)
+                    JobFormDivider()
+                    JobTextField("Property / Site (optional)", placeholder: "e.g. 12 Oak Avenue", text: $job.siteAddress)
+                    JobFormDivider()
+                    DatePicker("Date", selection: $job.createdAt, displayedComponents: .date).font(.subheadline).foregroundStyle(Brand.navy)
+                }
+                JobFormHeading("Work")
+                JobFormCard {
+                    VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue, minEditorHeight: 58)
+                    JobFormDivider()
+                    JobTextField("Contractor / technician", placeholder: "e.g. Alex Turner", text: $job.technician)
+                    JobFormDivider()
+                    Button { showingCategory = true } label: {
+                        HStack { Text("Category").foregroundStyle(Brand.navy); Spacer(); Text(job.category.isEmpty ? "Select category" : job.category).foregroundStyle(Brand.blue); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }.font(.subheadline)
+                    }.buttonStyle(.plain)
+                }
+                JobFormHeading("Client contact")
+                JobFormCard {
+                    JobTextField("Email", placeholder: "Client email", text: $job.clientEmail)
+                    JobFormDivider()
+                    JobTextField("Phone", placeholder: "Client phone", text: $job.clientPhone)
+                }
+            }.padding(18)
+        }.background(Brand.background).navigationTitle("Edit Job").toolbar { Button("Done") { dismiss() } }
+            .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: job.category) { job.category = $0 } }
             .onDisappear { job.technicianConfirmed = false }
     }
 }
@@ -194,6 +221,7 @@ struct SettingsView: View {
             Section {
                 if let profile { NavigationLink { BusinessProfileView(profile: profile) } label: { Label("Business Details", systemImage: "building.2") } }
                 else { Button { let value = BusinessProfile(); context.insert(value); editingProfile = value } label: { Label("Business Details", systemImage: "building.2") } }
+                NavigationLink { JobDefaultsView() } label: { Label("Job Defaults", systemImage: "slider.horizontal.3") }
                 NavigationLink { DocumentSettingsView() } label: { Label("Document Settings", systemImage: "slider.horizontal.3") }
                 NavigationLink { TemplatesView() } label: { Label("Templates", systemImage: "doc.text") }
                 NavigationLink { DataManagementView() } label: { Label("Data Management", systemImage: "externaldrive") }
@@ -204,6 +232,105 @@ struct SettingsView: View {
             }
         }.navigationTitle("Settings")
             .sheet(item: $editingProfile) { value in NavigationStack { BusinessProfileView(profile: value) } }
+    }
+}
+
+struct JobDefaultsView: View {
+    @State private var defaults = JobDefaultsService.shared
+    var body: some View {
+        List {
+            Section {
+                NavigationLink { DefaultTechnicianView() } label: {
+                    settingRow("Default Technician", value: defaults.state.defaultTechnician.isEmpty ? "Automatic" : defaults.state.defaultTechnician)
+                }
+                NavigationLink { DefaultCategoryView() } label: {
+                    let category = defaults.category()
+                    settingRow("Default Category", value: defaults.state.categoryMode == .lastUsed ? "Last Used" : defaults.state.categoryMode == .none ? "None" : category)
+                }
+            } footer: { Text("Automatic technician uses Business Details first, then the most recently used name.") }
+            Section("Categories") {
+                NavigationLink { ManageCustomCategoriesView() } label: { Text("Manage Custom Categories") }
+            }
+        }.navigationTitle("Job Defaults")
+    }
+    private func settingRow(_ title: String, value: String) -> some View {
+        HStack { Text(title); Spacer(); Text(value).foregroundStyle(.secondary).lineLimit(1) }
+    }
+}
+
+struct DefaultTechnicianView: View {
+    @State private var defaults = JobDefaultsService.shared
+    var body: some View {
+        Form {
+            Section {
+                TextField("None / Automatic", text: $defaults.state.defaultTechnician).textContentType(.name)
+                if !defaults.state.defaultTechnician.isEmpty { Button("Use Automatic") { defaults.state.defaultTechnician = "" } }
+            } header: { Text("Default Technician") } footer: { Text("This stays fixed until you change it here. Individual jobs remain editable.") }
+            if !defaults.state.recentTechnicians.isEmpty {
+                Section("Recent") {
+                    ForEach(defaults.state.recentTechnicians, id: \.self) { name in
+                        Button(name) { defaults.state.defaultTechnician = name }.foregroundStyle(Brand.navy)
+                    }
+                }
+            }
+        }.navigationTitle("Default Technician")
+    }
+}
+
+struct DefaultCategoryView: View {
+    @State private var defaults = JobDefaultsService.shared
+    var body: some View {
+        List {
+            Section {
+                row("None", selected: defaults.state.categoryMode == .none) { defaults.state.categoryMode = .none }
+                row("Last Used", selected: defaults.state.categoryMode == .lastUsed) { defaults.state.categoryMode = .lastUsed }
+            }
+            Section("Categories") {
+                ForEach(JobCategories.builtIn, id: \.self) { name in
+                    row(name, selected: defaults.state.categoryMode == .selected && defaults.state.selectedCategory == name) { choose(name) }
+                }
+            }
+            if !defaults.state.customCategories.isEmpty {
+                Section("Custom Categories") {
+                    ForEach(defaults.state.customCategories, id: \.self) { name in
+                        row(name, selected: defaults.state.categoryMode == .selected && defaults.state.selectedCategory == name) { choose(name) }
+                    }
+                }
+            }
+        }.navigationTitle("Default Category")
+    }
+    private func choose(_ name: String) { defaults.state.selectedCategory = name; defaults.state.categoryMode = .selected }
+    private func row(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack { Text(title); Spacer(); if selected { Image(systemName: "checkmark").foregroundStyle(Brand.blue) } }
+                .foregroundStyle(selected ? Brand.blue : Brand.navy)
+        }.buttonStyle(.plain)
+    }
+}
+
+struct ManageCustomCategoriesView: View {
+    @State private var defaults = JobDefaultsService.shared
+    @State private var nameToRename = ""
+    @State private var proposedName = ""
+    @State private var showingRename = false
+    @State private var error = ""
+    var body: some View {
+        List {
+            if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            if defaults.state.customCategories.isEmpty {
+                ContentUnavailableView("No custom categories", systemImage: "tag", description: Text("Add one from a job’s category picker."))
+            } else {
+                ForEach(defaults.state.customCategories, id: \.self) { name in
+                    HStack { Text(name); Spacer(); Button("Rename") { nameToRename = name; proposedName = name; showingRename = true }.font(.caption) }
+                        .swipeActions { Button("Delete", role: .destructive) { defaults.deleteCustomCategory(name) } }
+                }
+            }
+        }.navigationTitle("Custom Categories")
+            .alert("Rename category", isPresented: $showingRename) {
+                TextField("Category name", text: $proposedName)
+                Button("Save") { if !defaults.renameCustomCategory(nameToRename, to: proposedName) { error = "Choose a unique category name." } }
+                Button("Cancel", role: .cancel) { }
+            } message: { Text("Older jobs keep the category name they were saved with.") }
     }
 }
 
