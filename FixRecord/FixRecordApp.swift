@@ -146,7 +146,7 @@ struct CreateJobView: View {
         Form {
             Section("Job") { TextField("Job title", text: $title); TextField("Client name", text: $client); TextField("Property / Site (optional)", text: $address); DatePicker("Date", selection: $date, displayedComponents: .date) }
             Section("Work") { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $issue); TextField("Contractor / technician", text: $technician); Picker("Category", selection: $category) { ForEach(categories, id: \.self) { Text($0) } } }
-            Section { PrimaryButton(title: "Save & Add Photos", icon: "camera") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty) }
+            Section { PrimaryButton(title: "Save Job", icon: "checkmark") { save() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty) }
         }.navigationTitle("New Job").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .onAppear { technician = profile?.ownerName ?? "" }
@@ -173,8 +173,8 @@ struct JobDetailView: View {
                     if job.isSample { Label("SAMPLE DATA", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
                 }
                 Picker("Status", selection: Binding(get: { job.status }, set: { job.status = $0 })) { ForEach(JobStatus.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
-                NavigationLink { PhotoCaptureView(job: job, kind: .before) } label: { feature("Capture Before", subtitle: "Document the starting condition", icon: "camera") }
-                NavigationLink { PhotoCaptureView(job: job, kind: .after) } label: { feature("Capture After · MatchShot", subtitle: "Line up with a before photo", icon: "square.on.square") }
+                NavigationLink { PhotoCaptureView(job: job, kind: .before) } label: { feature("Capture Before", subtitle: "Optional photo of the starting condition", icon: "camera") }
+                NavigationLink { PhotoCaptureView(job: job, kind: .after) } label: { feature("Capture After · MatchShot", subtitle: "Optional photo of the finished work", icon: "square.on.square") }
                 NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Review before and after", icon: "photo.on.rectangle.angled") }
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }

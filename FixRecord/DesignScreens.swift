@@ -287,6 +287,7 @@ struct TemplatesView: View {
 
 struct DocumentSettingsView: View {
     @State private var options = DocumentOptions.load()
+    @AppStorage("showPhotosInWorkReport") private var showPhotosInWorkReport = true
     @StateObject private var entitlements = EntitlementService.shared
     @State private var showingUpgrade = false
     var body: some View {
@@ -297,6 +298,7 @@ struct DocumentSettingsView: View {
                 proToggle("Show FixRecord branding", value: $options.showFixRecordBranding, reversedGate: true)
             }
             Section("Work Report") {
+                Toggle("Show before & after photos", isOn: $showPhotosInWorkReport)
                 Toggle("Show reported issue", isOn: $options.showReportedIssue)
                 Toggle("Show materials used", isOn: $options.showMaterials)
                 Toggle("Show technician confirmation", isOn: $options.showTechnicianConfirmation)

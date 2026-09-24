@@ -50,6 +50,33 @@ final class FixRecordTests: XCTestCase {
         let draft = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
         XCTAssertFalse((draft.string ?? "").contains("COMPLETED BY"))
     }
+    func testPhotoFreeWorkReportUsesTextLayout() throws {
+        let job = SampleJob.make()
+        job.photos = []
+        var options = DocumentOptions()
+        options.showPricesInReport = true
+        let report = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options)))
+        let content = report.string ?? ""
+        XCTAssertEqual(report.pageCount, 1)
+        XCTAssertTrue(content.contains("Work Report"))
+        XCTAssertTrue(content.contains("Materials Used"))
+        XCTAssertTrue(content.contains("UNIT PRICE"))
+        XCTAssertFalse(content.contains("BEFORE"))
+        XCTAssertFalse(content.contains("AFTER"))
+    }
+    func testPhotosCanBeHiddenWithoutRemovingThemFromJob() throws {
+        let job = SampleJob.make()
+        let report = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, includePhotos: false)))
+        XCTAssertEqual(job.photos.count, 2)
+        XCTAssertFalse((report.string ?? "").contains("BEFORE"))
+    }
+    func testSinglePhotoDoesNotCreateEmptyPartnerPanel() throws {
+        let job = SampleJob.make()
+        job.photos = job.photos.filter { $0.kind == .before }
+        let report = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
+        XCTAssertTrue((report.string ?? "").contains("BEFORE"))
+        XCTAssertFalse((report.string ?? "").contains("AFTER"))
+    }
     func testInvoiceIncludesBusinessTaxNumber() throws {
         let profile = BusinessProfile()
         profile.businessName = "Turner Maintenance"

@@ -36,6 +36,7 @@ struct ExportView: View {
     @State private var showingUpgrade = false
     @State private var showingBusiness = false
     @State private var dismissedBusinessPrompt = false
+    @AppStorage("showPhotosInWorkReport") private var showPhotosInWorkReport = true
     @StateObject private var entitlements = EntitlementService.shared
     private var profile: BusinessProfile? { profiles.first }
 
@@ -71,16 +72,17 @@ struct ExportView: View {
         .onChange(of: kind) { _, _ in render() }
         .task { await entitlements.refresh(); render() }
         .onChange(of: entitlements.isPro) { _, _ in render() }
+        .onChange(of: showPhotosInWorkReport) { _, _ in render() }
         .onChange(of: showingBusiness) { _, showing in if !showing { render() } }
     }
     private func render() {
         guard kind != .pack || entitlements.isPro else { data = Data(); url = nil; return }
         do {
             let options = DocumentOptions.load()
-            data = try PDFMaker.make(kind: kind, job: job, profile: profile, options: options, isPro: entitlements.isPro)
+            data = try PDFMaker.make(kind: kind, job: job, profile: profile, options: options, isPro: entitlements.isPro, includePhotos: showPhotosInWorkReport)
             url = try exportURL(for: data, label: kind.rawValue)
             if entitlements.isPro {
-                let pack = try PDFMaker.make(kind: .pack, job: job, profile: profile, options: options, isPro: true)
+                let pack = try PDFMaker.make(kind: .pack, job: job, profile: profile, options: options, isPro: true, includePhotos: showPhotosInWorkReport)
                 packURL = try exportURL(for: pack, label: "Client Pack")
             } else { packURL = nil }
             error = ""
@@ -122,7 +124,7 @@ enum PDFMaker {
     private static let margin: CGFloat = 44
     private static let contentWidth: CGFloat = 507
 
-    static func make(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions = DocumentOptions(), isPro: Bool = false) throws -> Data {
+    static func make(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions = DocumentOptions(), isPro: Bool = false, includePhotos: Bool = true) throws -> Data {
         guard kind != .pack || isPro else {
             throw NSError(domain: "FixRecord", code: 3, userInfo: [NSLocalizedDescriptionKey: "Client Pack requires Pro."])
         }
@@ -135,7 +137,10 @@ enum PDFMaker {
             throw NSError(domain: "FixRecord", code: 2, userInfo: [NSLocalizedDescriptionKey: "Add a description to every invoice item before exporting."])
         }
         return UIGraphicsPDFRenderer(bounds: page).pdfData { context in
-            if kind == .report || kind == .pack { drawReport(context, job: job, profile: profile, options: effective) }
+            if kind == .report || kind == .pack {
+                if includePhotos && !job.photos.isEmpty { drawReport(context, job: job, profile: profile, options: effective) }
+                else { drawTextReport(context, job: job, profile: profile, options: effective) }
+            }
             if kind == .invoice || kind == .pack { drawInvoice(context, job: job, profile: profile, options: effective) }
         }
     }
@@ -168,8 +173,12 @@ enum PDFMaker {
         let after = job.photos.filter { $0.kind == .after }
         for pair in photoPairs(before: before, after: after) {
             ensure(205, y: &y, context: context, options: options)
-            photo(pair.0, title: "BEFORE", x: margin, y: y)
-            photo(pair.1, title: "AFTER", x: margin + 258, y: y)
+            if pair.0 != nil && pair.1 != nil {
+                photo(pair.0, title: "BEFORE", x: margin, y: y)
+                photo(pair.1, title: "AFTER", x: margin + 258, y: y)
+            } else {
+                photo(pair.0 ?? pair.1, title: pair.0 == nil ? "AFTER" : "BEFORE", x: margin, y: y, width: contentWidth)
+            }
             y += 201
         }
         if !job.summary.isEmpty {
@@ -199,6 +208,130 @@ enum PDFMaker {
         }
         if options.showAdditionalNotes && !job.invoiceNotes.isEmpty { section("ADDITIONAL NOTES", y: &y); paragraph(job.invoiceNotes, y: &y, context: context, options: options) }
         footer(job: job, options: options)
+    }
+
+    private static func drawTextReport(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
+        context.beginPage()
+        var nameX = margin
+        if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
+            aspectFill(logo, in: CGRect(x: margin, y: 34, width: 48, height: 48)); nameX += 60
+        } else if options.showFixRecordBranding {
+            fill(CGRect(x: margin, y: 34, width: 48, height: 48), colour: navy)
+            drawPDFSymbol("wrench.adjustable.fill", in: CGRect(x: margin + 10, y: 44, width: 28, height: 28), colour: .white)
+            nameX += 60
+        }
+        let business = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
+        text(business.isEmpty ? "Your Business" : business, x: nameX, y: 38, width: 280, size: 20, bold: true, colour: navy)
+        text("Professional work documentation", x: nameX, y: 66, width: 270, size: 9, colour: .darkGray)
+        if options.showBusinessDetails {
+            let contact = [profile?.phone, profile?.email, profile?.address].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+            text(contact, x: 377, y: 38, width: 174, height: 56, size: 8, colour: navy, alignment: .right, wrap: true)
+        }
+        line(106)
+
+        text("Work Report", x: margin, y: 122, width: 360, size: 28, bold: true, colour: navy)
+        let completed = job.status == .completed
+        fill(CGRect(x: 456, y: 128, width: 95, height: 25), colour: completed ? UIColor(red: 0.87, green: 0.98, blue: 0.91, alpha: 1) : pale)
+        text(job.status.rawValue, x: 461, y: 134, width: 85, size: 10, bold: true, colour: completed ? green : navy, alignment: .center)
+        text(job.title, x: margin, y: 162, width: contentWidth, size: 13, bold: true, colour: navy)
+        let dateLabel = completed ? "Completed" : "Created"
+        text("Job #\(job.number)    |    \(dateLabel): \((job.completedAt ?? job.createdAt).formatted(date: .abbreviated, time: .omitted))", x: margin, y: 184, width: contentWidth, size: 10, colour: .darkGray)
+
+        var y: CGFloat = 216
+        panel(CGRect(x: margin, y: y, width: contentWidth, height: 87), template: options.template)
+        let identityWidth = (contentWidth - 20) / 3
+        let identity: [(String, String)] = [
+            ("CLIENT", [job.clientName, job.clientEmail].filter { !$0.isEmpty }.joined(separator: "\n")),
+            ("PROPERTY / SITE", job.siteAddress),
+            ("TECHNICIAN", [job.technician, business].filter { !$0.isEmpty }.joined(separator: "\n"))
+        ]
+        for (index, entry) in identity.enumerated() {
+            let x = margin + CGFloat(index) * (identityWidth + 10)
+            text(entry.0, x: x + 10, y: y + 12, width: identityWidth - 20, size: 9, bold: true, colour: navy)
+            text(entry.1, x: x + 10, y: y + 31, width: identityWidth - 20, height: 50, size: 10, colour: navy, wrap: true)
+        }
+        y += 106
+
+        if options.showReportedIssue && !job.issue.isEmpty {
+            textReportSection("Reported Issue", symbol: "doc.text.fill", value: job.issue, y: &y, context: context, options: options)
+        }
+        if !job.summary.isEmpty {
+            textReportSection("Work Completed", symbol: "wrench.adjustable.fill", value: job.summary, y: &y, context: context, options: options)
+        }
+        let materials = job.items.filter { $0.kind == .material && !$0.name.isEmpty }
+        if options.showMaterials && !materials.isEmpty {
+            ensure(56, y: &y, context: context, options: options)
+            reportIcon("shippingbox.fill", x: margin, y: y, size: 16)
+            text("Materials Used", x: margin + 28, y: y, width: 300, size: 12, bold: true, colour: navy)
+            y += 29
+            fill(CGRect(x: margin, y: y, width: contentWidth, height: 24), colour: pale)
+            text("ITEM", x: margin + 10, y: y + 6, width: 235, size: 9, bold: true, colour: navy)
+            text("QTY", x: 331, y: y + 6, width: 40, size: 9, bold: true, colour: navy)
+            if options.showPricesInReport {
+                text("UNIT PRICE", x: 389, y: y + 6, width: 75, size: 9, bold: true, colour: navy)
+                text("TOTAL", x: 475, y: y + 6, width: 65, size: 9, bold: true, colour: navy, alignment: .right)
+            }
+            y += 24
+            for item in materials {
+                ensure(25, y: &y, context: context, options: options)
+                text(item.name, x: margin + 10, y: y + 6, width: 265, size: 10, colour: navy)
+                text(item.quantity, x: 331, y: y + 6, width: 40, size: 10, colour: navy)
+                if options.showPricesInReport {
+                    text(Money.format(Money.parse(item.unitPrice), currency: job.currencyCode), x: 379, y: y + 6, width: 85, size: 10, colour: navy)
+                    text(Money.format(item.total, currency: job.currencyCode), x: 465, y: y + 6, width: 75, size: 10, colour: navy, alignment: .right)
+                }
+                line(y + 24); y += 25
+            }
+            y += 18
+        }
+        if options.showAdditionalNotes && !job.invoiceNotes.isEmpty {
+            textReportSection("Additional Notes", symbol: "note.text", value: job.invoiceNotes, y: &y, context: context, options: options)
+        }
+        if options.showTechnicianConfirmation && completed && job.technicianConfirmed && !job.technician.isEmpty {
+            ensure(98, y: &y, context: context, options: options)
+            let cardWidth = (contentWidth - 14) / 2
+            panel(CGRect(x: margin, y: y, width: cardWidth, height: 82), template: options.template)
+            panel(CGRect(x: margin + cardWidth + 14, y: y, width: cardWidth, height: 82), template: options.template)
+            text("COMPLETED BY", x: margin + 11, y: y + 10, width: cardWidth - 22, size: 10, bold: true, colour: navy)
+            text([job.technician, business, job.completedAt?.formatted(date: .abbreviated, time: .shortened) ?? ""].filter { !$0.isEmpty }.joined(separator: "\n"), x: margin + 11, y: y + 28, width: cardWidth - 22, height: 50, size: 10, colour: navy, wrap: true)
+            let signatureX = margin + cardWidth + 25
+            text("SIGNATURE (OPTIONAL)", x: signatureX, y: y + 10, width: cardWidth - 22, size: 10, bold: true, colour: navy)
+            let path = UIBezierPath(); path.move(to: CGPoint(x: signatureX, y: y + 61)); path.addLine(to: CGPoint(x: signatureX + cardWidth - 24, y: y + 61)); UIColor.lightGray.setStroke(); path.lineWidth = 0.7; path.stroke()
+            y += 97
+        }
+        if options.showClientAcknowledgement {
+            ensure(45, y: &y, context: context, options: options)
+            text("CLIENT ACKNOWLEDGEMENT (OPTIONAL)", x: margin, y: y, width: contentWidth, size: 10, bold: true, colour: navy)
+            text("Name: ____________________    Signature: ____________________    Date: __________", x: margin, y: y + 19, width: contentWidth, size: 9)
+        }
+        footer(job: job, options: options)
+    }
+
+    private static func textReportSection(_ title: String, symbol: String, value: String, y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
+        let width = contentWidth - 29
+        let font = UIFont.systemFont(ofSize: 11)
+        let height = max(17, ceil(NSString(string: value).boundingRect(with: CGSize(width: width, height: 650), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil).height) + 4)
+        ensure(33 + height, y: &y, context: context, options: options)
+        reportIcon(symbol, x: margin, y: y, size: 16)
+        text(title, x: margin + 29, y: y, width: width, size: 12, bold: true, colour: navy)
+        text(value, x: margin + 29, y: y + 26, width: width, height: height, size: 11, colour: navy, wrap: true)
+        y += 34 + height
+        line(y); y += 16
+    }
+
+    private static func reportIcon(_ symbol: String, x: CGFloat, y: CGFloat, size: CGFloat) {
+        drawPDFSymbol(symbol, in: CGRect(x: x, y: y + 1, width: size, height: size), colour: navy)
+    }
+
+    private static func drawPDFSymbol(_ symbol: String, in rect: CGRect, colour: UIColor) {
+        guard let source = UIImage(systemName: symbol)?.withTintColor(colour, renderingMode: .alwaysOriginal) else { return }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 3
+        format.opaque = false
+        let raster = UIGraphicsImageRenderer(size: rect.size, format: format).image { _ in
+            source.draw(in: CGRect(origin: .zero, size: rect.size))
+        }
+        raster.draw(in: rect)
     }
 
     private static func drawInvoice(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
@@ -280,10 +413,13 @@ enum PDFMaker {
         return 111
     }
 
-    private static func photo(_ value: JobPhoto?, title: String, x: CGFloat, y: CGFloat) {
-        let box = CGRect(x: x, y: y, width: 249, height: 187)
+    private static func photo(_ value: JobPhoto?, title: String, x: CGFloat, y: CGFloat, width: CGFloat = 249) {
+        let box = CGRect(x: x, y: y, width: width, height: 187)
         if let value, let image = PhotoStore.image(value.filename) { aspectFill(image, in: box) }
-        else { fill(box, colour: pale); text("No photo", x: x + 20, y: y + 82, width: 209, size: 11, colour: .gray, alignment: .center) }
+        else {
+            fill(box, colour: pale)
+            text("Photo unavailable", x: x + 20, y: y + 82, width: width - 40, size: 11, colour: .gray, alignment: .center)
+        }
         fill(CGRect(x: x, y: y, width: 66, height: 23), colour: title == "AFTER" ? green : navy)
         text(title, x: x + 8, y: y + 5, width: 55, size: 9, bold: true, colour: .white)
     }
