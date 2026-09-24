@@ -19,6 +19,19 @@
 
 The before and after sample photos are original generated demo assets. They depict a fictional repair and are provided only to exercise the app.
 
+## Test on your iPhone
+
+A free Apple Account is enough to install FixRecord on your own iPhone through Xcode. You do not need a paid Apple Developer Program membership for this local test. The phone must run iOS 17 or later.
+
+1. Connect the iPhone to the Mac with a cable, unlock it, and accept **Trust This Computer** on the phone if prompted.
+2. In Xcode, open **Xcode → Settings → Apple Accounts** and add **Andrea's Apple Account**. Confirm that Xcode shows Andrea's **Personal Team**. Do not select someone else's team for FixRecord.
+3. Open `FixRecord.xcodeproj`. Select the **FixRecord** project, then the **FixRecord** app target, then **Signing & Capabilities**. Turn on **Automatically manage signing** and select Andrea's Personal Team. If Xcode says the bundle identifier is unavailable, change it to a unique value such as `com.andreajanewilliams.fixrecord`.
+4. Select the connected iPhone as the run destination. On the phone, enable **Settings → Privacy & Security → Developer Mode** if Xcode asks for it; the phone will restart and ask you to confirm with its passcode. The option may appear only after pairing begins.
+5. Press **Run** in Xcode. Allow camera and photo-library access when FixRecord asks. Use **Tools → Load Sample Job** to inspect the existing flow, then create a new job and take real before and after photos to test the camera and MatchShot guidance.
+6. To test Pro, set the FixRecord app target's **Debug** `REVENUECAT_API_KEY` build setting to Andrea's public RevenueCat Test Store key (`test_…`), rebuild, then open **Profile → Upgrade / RevenueCat Test Store**. The test sheet makes no real charge. Keep the Release build free of Test Store keys.
+
+With a free Personal Team, Apple says the provisioning profile expires after seven days; rebuild and reinstall from Xcode when needed. The repository can stay private throughout phone testing.
+
 ### Run checks
 
 ```sh
