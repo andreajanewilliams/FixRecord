@@ -1,10 +1,13 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import PDFKit
 
 struct OnboardingView: View {
     let finish: () -> Void
     @State private var page = 0
+    @State private var reportPreview: UIImage?
+    @State private var invoicePreview: UIImage?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,18 +82,40 @@ struct OnboardingView: View {
         VStack(spacing: 20) {
             Text("Professional documents,\nready to go.").font(.system(size: 30, weight: .bold)).multilineTextAlignment(.center).foregroundStyle(Brand.navy)
             Text("Turn job details into polished reports and invoices you can send to clients in minutes.").multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 35)
-            HStack(spacing: 16) { card("Work Report", "doc.text.image"); card("Invoice", "doc.text") }.padding(.horizontal, 24).padding(.top, 25)
-        }
+            ZStack {
+                if let invoicePreview {
+                    documentImage(invoicePreview)
+                        .rotationEffect(.degrees(7)).offset(x: 52, y: 13)
+                }
+                if let reportPreview {
+                    documentImage(reportPreview)
+                        .rotationEffect(.degrees(-7)).offset(x: -52, y: -7)
+                        .zIndex(1)
+                }
+                if reportPreview == nil && invoicePreview == nil { ProgressView().frame(height: 280) }
+            }.frame(height: 300).padding(.top, 15)
+        }.onAppear(perform: prepareDocumentPreviews)
     }
 
-    private func card(_ title: String, _ icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Image(systemName: icon).font(.system(size: 38)).foregroundStyle(Brand.blue)
-            Rectangle().fill(Brand.navy).frame(height: 3)
-            Text(title).font(.headline).foregroundStyle(Brand.navy)
-            ForEach(0..<3) { _ in RoundedRectangle(cornerRadius: 2).fill(Brand.pale).frame(height: 8) }
-        }.frame(maxWidth: .infinity, minHeight: 175, alignment: .topLeading).padding(15)
-            .background(.white, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(Brand.pale)).shadow(radius: 6)
+    private func documentImage(_ image: UIImage) -> some View {
+        Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+            .frame(width: 192, height: 272)
+            .background(.white, in: RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.06)))
+            .shadow(color: Brand.navy.opacity(0.20), radius: 14, x: 0, y: 8)
+    }
+
+    private func prepareDocumentPreviews() {
+        guard reportPreview == nil || invoicePreview == nil else { return }
+        let sample = SampleJob.make()
+        func thumbnail(_ kind: ExportKind) -> UIImage? {
+            guard let data = try? PDFMaker.make(kind: kind, job: sample, profile: nil),
+                  let page = PDFDocument(data: data)?.page(at: 0) else { return nil }
+            return page.thumbnail(of: CGSize(width: 512, height: 725), for: .mediaBox)
+        }
+        reportPreview = thumbnail(.report)
+        invoicePreview = thumbnail(.invoice)
     }
 
     private var dots: some View {
