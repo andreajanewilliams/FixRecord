@@ -13,6 +13,8 @@
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSCameraUsageDescription</key><string>Capture before and after job photos and receipts.</string>
     <key>NSPhotoLibraryUsageDescription</key><string>Import job photos and receipts.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Dictate reported issues and work completed notes on this device.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Convert your spoken job notes to editable text on this device.</string>
     <key>REVENUECAT_API_KEY</key><string>$(REVENUECAT_API_KEY)</string>
     <key>AI_ENDPOINT</key><string>$(AI_ENDPOINT)</string>
     <key>UISupportedInterfaceOrientations</key>

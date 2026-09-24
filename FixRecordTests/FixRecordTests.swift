@@ -1,5 +1,7 @@
 import XCTest
 import UIKit
+import PDFKit
+import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
@@ -28,6 +30,37 @@ final class FixRecordTests: XCTestCase {
         XCTAssertThrowsError(try PDFMaker.make(kind: .invoice, job: job, profile: nil))
         XCTAssertNoThrow(try PDFMaker.make(kind: .report, job: job, profile: nil))
     }
+    func testWorkReportCanExportWithUnfinishedInvoicePrices() throws {
+        let job = SampleJob.make()
+        job.items = [PriceItem(kind: .material, name: "Connector", unitPrice: "not entered")]
+        XCTAssertNoThrow(try PDFMaker.make(kind: .report, job: job, profile: nil))
+        XCTAssertThrowsError(try PDFMaker.make(kind: .invoice, job: job, profile: nil))
+        var pricedReport = DocumentOptions()
+        pricedReport.showPricesInReport = true
+        XCTAssertThrowsError(try PDFMaker.make(kind: .report, job: job, profile: nil, options: pricedReport))
+    }
+    func testReportOnlyNamesConfirmedCompletedTechnician() throws {
+        let job = SampleJob.make()
+        job.technicianConfirmed = false
+        let unconfirmed = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
+        XCTAssertFalse((unconfirmed.string ?? "").contains("COMPLETED BY"))
+        job.technicianConfirmed = true
+        job.status = .inProgress
+        XCTAssertFalse(job.technicianConfirmed)
+        let draft = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
+        XCTAssertFalse((draft.string ?? "").contains("COMPLETED BY"))
+    }
+    func testInvoiceIncludesBusinessTaxNumber() throws {
+        let profile = BusinessProfile()
+        profile.businessName = "Turner Maintenance"
+        profile.address = "Workshop 12, Industrial Estate\nLong Market Street\nBristol BS8 2QH"
+        profile.phone = "07123 456789"
+        profile.email = "hello@example.com"
+        profile.taxNumber = "GB123456789"
+        let invoice = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .invoice, job: SampleJob.make(), profile: profile)))
+        XCTAssertTrue((invoice.string ?? "").contains("GB123456789"))
+        XCTAssertEqual(invoice.pageCount, 1)
+    }
     func testAllPairedAfterPhotosAppearInReportPlan() {
         let before = JobPhoto(kind: .before, filename: "before")
         let first = JobPhoto(kind: .after, filename: "after-1", pairedBeforeID: before.id)
@@ -49,7 +82,7 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(job.status, .completed)
         XCTAssertNotNil(job.completedAt)
         XCTAssertEqual(job.photos.count, 2)
-        XCTAssertEqual(job.items.count, 3)
+        XCTAssertEqual(job.items.count, 5)
         job.status = .inProgress
         XCTAssertNil(job.completedAt)
     }
@@ -62,7 +95,7 @@ final class FixRecordTests: XCTestCase {
     }
     func testPDFAndAIFallbackDecoding() throws {
         let job = SampleJob.make()
-        let data = try PDFMaker.make(kind: .pack, job: job, profile: nil)
+        let data = try PDFMaker.make(kind: .pack, job: job, profile: nil, isPro: true)
         XCTAssertFalse(data.isEmpty)
         let response = try JSONDecoder().decode(AIResponse.self, from: Data(#"{"reportedIssue":"issue","workCompleted":"work","completionNotes":"note","professionalSummary":"summary"}"#.utf8))
         XCTAssertEqual(response.professionalSummary, "summary")
@@ -75,8 +108,8 @@ final class FixRecordTests: XCTestCase {
         XCTAssertTrue(result.guidance.contains("uncertain"))
     }
     func testMatchShotSamplePairProducesGuidance() throws {
-        let before = try XCTUnwrap(UIImage(named: "sample-before-original"))
-        let after = try XCTUnwrap(UIImage(named: "sample-after-original"))
+        let before = try XCTUnwrap(UIImage(named: "sample-before-repair-v2"))
+        let after = try XCTUnwrap(UIImage(named: "sample-after-repair-v2"))
         let result = MatchShotBridge.compare(before: before, after: after)
         XCTAssertFalse(result.guidance.isEmpty)
         XCTAssertNotNil(PhotoStore.image("sample-before"))
@@ -85,6 +118,61 @@ final class FixRecordTests: XCTestCase {
     func testClientPackEntitlementGate() {
         XCTAssertFalse(FeatureAccess.canExportClientPack(isPro: false))
         XCTAssertTrue(FeatureAccess.canExportClientPack(isPro: true))
+        XCTAssertThrowsError(try PDFMaker.make(kind: .pack, job: SampleJob.make(), profile: nil))
+    }
+
+    func testSampleTotalsAndOptionalInvoiceSections() throws {
+        let job = SampleJob.make()
+        let totals = InvoiceTotals(items: job.items, discount: 0, taxRate: 20)
+        XCTAssertEqual(totals.materials, Decimal(string: "7.70"))
+        XCTAssertEqual(totals.labour, Decimal(string: "67.50"))
+        XCTAssertEqual(totals.charges, Decimal(string: "25.00"))
+        XCTAssertEqual(totals.grandTotal, Decimal(string: "120.24"))
+        var options = DocumentOptions()
+        options.showTax = false; options.showDueDate = false; options.showTerms = false
+        let data = try PDFMaker.make(kind: .invoice, job: job, profile: nil, options: options)
+        let pdf = try XCTUnwrap(PDFDocument(data: data))
+        let words = pdf.string ?? ""
+        XCTAssertTrue(words.contains("TOTAL DUE"))
+        XCTAssertFalse(words.contains("Tax / VAT"))
+        XCTAssertFalse(words.contains("Payment due within"))
+    }
+
+    func testFreeBrandingAndProOptionalReportSections() throws {
+        let job = SampleJob.make()
+        var options = DocumentOptions()
+        options.showFixRecordBranding = false
+        options.showReportedIssue = false
+        options.showMaterials = false
+        let free = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options)))
+        let pro = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options, isPro: true)))
+        XCTAssertTrue((free.string ?? "").contains("Generated with FixRecord"))
+        XCTAssertFalse((pro.string ?? "").contains("Generated with FixRecord"))
+        XCTAssertFalse((pro.string ?? "").contains("REPORTED ISSUE"))
+        XCTAssertFalse((pro.string ?? "").contains("MATERIALS USED"))
+        XCTAssertTrue((pro.string ?? "").contains("WORK COMPLETED"))
+    }
+
+    func testReceiptReviewRejectsIncompleteItems() {
+        let parsed = ReceiptParser.parse(["Builders Warehouse", "2026-09-24", "PVC Connector 40mm 89.99", "Rubber Washer 12.50", "TOTAL 102.49"])
+        XCTAssertEqual(parsed.items.count, 2)
+        XCTAssertTrue(ReceiptParser.canConfirm(parsed.items))
+        var incomplete = parsed.items
+        incomplete[0].unitPrice = "bad"
+        XCTAssertFalse(ReceiptParser.canConfirm(incomplete))
+    }
+
+    func testJobSurvivesSwiftDataSave() throws {
+        let container = try ModelContainer(for: Job.self, BusinessProfile.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let writer = ModelContext(container)
+        let job = SampleJob.make()
+        writer.insert(job)
+        try writer.save()
+        let reader = ModelContext(container)
+        let loaded = try XCTUnwrap(reader.fetch(FetchDescriptor<Job>()).first)
+        XCTAssertEqual(loaded.title, "Kitchen Sink Repair")
+        XCTAssertEqual(loaded.photos.count, 2)
+        XCTAssertEqual(loaded.items.count, 5)
     }
     func testPhotoFileRoundTrip() throws {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 3000, height: 1000)).image { context in UIColor.green.setFill(); context.fill(CGRect(x: 0, y: 0, width: 3000, height: 1000)) }

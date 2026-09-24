@@ -33,12 +33,25 @@ struct NotesView: View {
     @State private var busy = false
     var body: some View {
         Form {
-            Section("Your work note") { TextEditor(text: $job.roughNote).frame(minHeight: 140); Text("Record what you did and observed. The note remains usable without AI.").font(.caption).foregroundStyle(.secondary) }
+            Section { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue) }
+            Section { VoiceTextInput(title: "Work Completed", placeholder: "Describe what you completed…", text: $job.roughNote) }
             Section { Button { Task { await improve() } } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }.disabled(busy || job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             if !message.isEmpty { Section { Text(message).font(.caption).foregroundStyle(.secondary) } }
-            if !draft.isEmpty { Section("AI-assisted draft · review before use") { TextEditor(text: $draft).frame(minHeight: 140); Button("Use this note") { job.professionalNote = draft; draft = ""; message = "Reviewed note saved." } } }
-            if !job.professionalNote.isEmpty { Section("Saved professional note") { TextEditor(text: $job.professionalNote).frame(minHeight: 130) } }
-        }.navigationTitle("Job Notes")
+            if !draft.isEmpty {
+                Section("AI-assisted draft · review and edit") {
+                    TextEditor(text: $draft).frame(minHeight: 120)
+                    HStack {
+                        Button("Try Again") { Task { await improve() } }.disabled(busy)
+                        Spacer()
+                        Button("Use This Version") { job.professionalNote = draft; draft = ""; message = "Reviewed wording saved." }.buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+            if !job.professionalNote.isEmpty { Section("Approved wording") { TextEditor(text: $job.professionalNote).frame(minHeight: 110) } }
+        }.navigationTitle("Work Details")
+            .onChange(of: job.issue) { _, _ in job.technicianConfirmed = false }
+            .onChange(of: job.roughNote) { _, _ in job.technicianConfirmed = false }
+            .onChange(of: job.professionalNote) { _, _ in job.technicianConfirmed = false }
     }
     private func improve() async {
         busy = true; defer { busy = false }
@@ -49,7 +62,8 @@ struct NotesView: View {
 
 struct PricingView: View {
     @Bindable var job: Job
-    private var totals: InvoiceTotals { InvoiceTotals(items: job.items, discount: Money.parse(job.discount), taxRate: Money.parse(job.taxRate)) }
+    private var documentOptions: DocumentOptions { DocumentOptions.load() }
+    private var totals: InvoiceTotals { InvoiceTotals(items: job.items, discount: documentOptions.showDiscount ? Money.parse(job.discount) : 0, taxRate: documentOptions.showTax ? Money.parse(job.taxRate) : 0) }
     private var valid: Bool { Money.isValid(job.discount) && Money.isValid(job.taxRate) && job.items.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && Money.isValid($0.quantity) && Money.isValid($0.unitPrice) } }
     var body: some View {
         Form {
@@ -58,10 +72,11 @@ struct PricingView: View {
             itemSection("Labour", kind: .labour)
             itemSection("Additional charges", kind: .charge)
             Section("Adjustments") { HStack { Text("Currency"); Spacer(); TextField("Code", text: $job.currencyCode).multilineTextAlignment(.trailing).textInputAutocapitalization(.characters).frame(width: 80) }; HStack { Text("Tax / VAT %"); Spacer(); TextField("0", text: $job.taxRate).multilineTextAlignment(.trailing).keyboardType(.decimalPad).frame(width: 90) }; HStack { Text("Fixed discount"); Spacer(); TextField("0", text: $job.discount).multilineTextAlignment(.trailing).keyboardType(.decimalPad).frame(width: 90) }; DatePicker("Due date", selection: $job.dueDate, displayedComponents: .date); Toggle("Mark invoice paid", isOn: $job.paid); TextField("Invoice notes", text: $job.invoiceNotes, axis: .vertical) }
-            Section("Live summary") { totalRow("Materials", totals.materials); totalRow("Labour", totals.labour); totalRow("Additional charges", totals.charges); totalRow("Subtotal", totals.subtotal); totalRow("Discount", -totals.discount); totalRow("Tax / VAT", totals.tax); HStack { Text("Grand total").font(.headline); Spacer(); Text(Money.format(totals.grandTotal, currency: job.currencyCode)).font(.headline).foregroundStyle(Brand.teal) } }
+            Section("Live summary") { totalRow("Materials", totals.materials); totalRow("Labour", totals.labour); totalRow("Additional charges", totals.charges); totalRow("Subtotal", totals.subtotal); if documentOptions.showDiscount { totalRow("Discount", -totals.discount) }; if documentOptions.showTax { totalRow("Tax / VAT", totals.tax) }; HStack { Text("Grand total").font(.headline); Spacer(); Text(Money.format(totals.grandTotal, currency: job.currencyCode)).font(.headline).foregroundStyle(Brand.blue) } }
             if !valid { Section { Label("Add a description and review quantities or prices before exporting the invoice.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) } }
             Section { NavigationLink("Preview invoice") { ExportView(job: job) }.disabled(!valid) }
         }.navigationTitle("Materials & Pricing")
+            .onChange(of: job.itemsData) { _, _ in job.technicianConfirmed = false }
     }
     private func itemSection(_ title: String, kind: PriceItem.Kind) -> some View {
         Section(title) {
@@ -117,15 +132,33 @@ struct PricingView: View {
 struct UpgradeView: View {
     @StateObject private var service = EntitlementService.shared
     var body: some View {
-        List {
-            Section { Label(service.isPro ? "Pro active" : "Free plan", systemImage: service.isPro ? "checkmark.seal.fill" : "leaf"); Text("The core job, MatchShot, report and invoice workflows are available on Free.").font(.subheadline) }
-            Section("Upgrade") {
-                ForEach(service.packages, id: \.identifier) { package in Button { Task { await service.purchase(package) } } label: { HStack { Text(package.storeProduct.localizedTitle); Spacer(); Text(package.storeProduct.localizedPriceString) } } }
-                if service.packages.isEmpty { Text("No packages are configured. Connect a Test Store offering with a pro entitlement in RevenueCat.").font(.caption).foregroundStyle(.secondary) }
-                Button("Restore purchases") { Task { await service.restore() } }.disabled(!service.configured)
-            }
-            if !service.message.isEmpty { Section { Text(service.message).font(.caption) } }
-        }.navigationTitle("Plan & Upgrade").task { await service.refresh() }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(spacing: 9) {
+                    Image(systemName: service.isPro ? "checkmark.seal.fill" : "star.square.fill").font(.system(size: 48)).foregroundStyle(Brand.blue)
+                    Text(service.isPro ? "FixRecord Pro is active" : "Upgrade to FixRecord Pro").font(.title.bold()).multilineTextAlignment(.center)
+                    Text("Make every document your business's own.").multilineTextAlignment(.center).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity).padding(.top, 28)
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Remove FixRecord branding", systemImage: "checkmark.circle.fill")
+                    Label("Add your business logo", systemImage: "checkmark.circle.fill")
+                    Label("Choose premium templates", systemImage: "checkmark.circle.fill")
+                    Label("More AI-assisted writing", systemImage: "checkmark.circle.fill")
+                }.font(.subheadline).foregroundStyle(Brand.navy).padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 16))
+                if !service.isPro {
+                    ForEach(service.packages, id: \.identifier) { package in
+                        Button { Task { await service.purchase(package) } } label: {
+                            HStack { Text(package.storeProduct.localizedTitle); Spacer(); Text(package.storeProduct.localizedPriceString) }
+                                .font(.headline).frame(maxWidth: .infinity).padding(15).foregroundStyle(.white).background(Brand.blue, in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    if service.packages.isEmpty { Text("Purchases are unavailable right now.").font(.caption).foregroundStyle(.secondary) }
+                }
+                Button("Restore Purchases") { Task { await service.restore() } }.disabled(!service.configured).frame(maxWidth: .infinity)
+                if !service.message.isEmpty { Text(service.message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity) }
+            }.padding(20)
+        }.background(Brand.background).navigationTitle("FixRecord Pro").navigationBarTitleDisplayMode(.inline).task { await service.refresh() }
     }
 }
 

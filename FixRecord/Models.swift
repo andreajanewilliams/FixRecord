@@ -73,7 +73,7 @@ struct ReceiptRecord: Codable, Identifiable {
         self.taxRate = taxRate; discount = "0"; dueDate = Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date()
         paid = false; technicianConfirmed = false; photosData = Data(); itemsData = Data(); receiptsData = Data(); self.isSample = isSample
     }
-    var status: JobStatus { get { JobStatus(rawValue: statusRaw) ?? .draft } set { statusRaw = newValue.rawValue; completedAt = newValue == .completed ? Date() : nil } }
+    var status: JobStatus { get { JobStatus(rawValue: statusRaw) ?? .draft } set { statusRaw = newValue.rawValue; completedAt = newValue == .completed ? Date() : nil; if newValue != .completed { technicianConfirmed = false } } }
     var photos: [JobPhoto] { get { (try? JSONDecoder().decode([JobPhoto].self, from: photosData)) ?? [] } set { photosData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
     var items: [PriceItem] { get { (try? JSONDecoder().decode([PriceItem].self, from: itemsData)) ?? [] } set { itemsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
     var receipts: [ReceiptRecord] { get { (try? JSONDecoder().decode([ReceiptRecord].self, from: receiptsData)) ?? [] } set { receiptsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
@@ -174,14 +174,18 @@ enum PhotoStore {
 
 enum SampleJob {
     static func make() -> Job {
-        let job = Job(number: "FR-DEMO-001", title: "Kitchen Sink Repair", clientName: "Sarah Johnson (sample)", siteAddress: "123 Maple Street (sample)", category: "Plumbing", issue: "Leak reported beneath the kitchen sink at the trap connection.", technician: "Alex Rivera (sample)", businessName: "Rivera Home Services (sample)", currencyCode: "USD", taxRate: "8.25", isSample: true)
+        let job = Job(number: "FR-DEMO-001", title: "Kitchen Sink Repair", clientName: "Sarah Mitchell", siteAddress: "12 Oak Avenue, Bristol, BS8 2QH", category: "Plumbing", issue: "Leak from kitchen sink pipe.", technician: "Alex Turner", businessName: "Turner Maintenance", currencyCode: "GBP", taxRate: "20", isSample: true)
         job.status = .completed
-        job.roughNote = "Replaced damaged connector and tested connection. No leaks observed after installation."
-        job.professionalNote = "The technician replaced the damaged connector at the kitchen sink trap connection and tested the connection after installation. The technician recorded that no further leakage was observed at completion."
+        let date = Calendar.current.date(from: DateComponents(year: 2025, month: 10, day: 12, hour: 14, minute: 35)) ?? Date()
+        job.createdAt = date; job.completedAt = date
+        job.dueDate = Calendar.current.date(byAdding: .day, value: 14, to: date) ?? date
+        job.roughNote = "Changed connector and washer, tightened everything and tested it. Didn't see any more leaking."
+        job.professionalNote = "The damaged connector and washer were replaced and the fittings were tightened. The technician recorded that the connection was tested and no further leakage was observed."
         job.technicianConfirmed = true
-        let before = JobPhoto(kind: .before, filename: "sample-before-original")
-        job.photos = [before, JobPhoto(kind: .after, filename: "sample-after-original", pairedBeforeID: before.id)]
-        job.items = [PriceItem(kind: .material, name: "PVC connector", quantity: "1", unitPrice: "8.50"), PriceItem(kind: .material, name: "Plumber's putty", quantity: "1", unitPrice: "5.00"), PriceItem(kind: .labour, name: "Plumbing labour", quantity: "1", unitPrice: "85.00")]
+        let before = JobPhoto(kind: .before, filename: "sample-before-repair-v2")
+        job.photos = [before, JobPhoto(kind: .after, filename: "sample-after-repair-v2", pairedBeforeID: before.id)]
+        job.items = [PriceItem(kind: .material, name: "40mm compression connector", quantity: "1", unitPrice: "4.50"), PriceItem(kind: .material, name: "Rubber washer", quantity: "1", unitPrice: "1.20"), PriceItem(kind: .material, name: "Plumber's tape", quantity: "1", unitPrice: "2.00"), PriceItem(kind: .labour, name: "Plumbing labour", quantity: "1.5", unitPrice: "45.00"), PriceItem(kind: .charge, name: "Call-out fee", quantity: "1", unitPrice: "25.00")]
+        job.invoiceNotes = "Payment due within 14 days. Please quote the invoice number when paying."
         return job
     }
 }

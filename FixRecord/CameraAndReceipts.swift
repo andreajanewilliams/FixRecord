@@ -2,6 +2,24 @@ import SwiftUI
 import PhotosUI
 @preconcurrency import AVFoundation
 import Vision
+import VisionKit
+import ImageIO
+
+private extension UIImage.Orientation {
+    var cgImagePropertyOrientation: CGImagePropertyOrientation {
+        switch self {
+        case .up: .up
+        case .down: .down
+        case .left: .left
+        case .right: .right
+        case .upMirrored: .upMirrored
+        case .downMirrored: .downMirrored
+        case .leftMirrored: .leftMirrored
+        case .rightMirrored: .rightMirrored
+        @unknown default: .up
+        }
+    }
+}
 
 final class CameraController: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
     let session = AVCaptureSession()
@@ -16,7 +34,12 @@ final class CameraController: NSObject, ObservableObject, AVCapturePhotoCaptureD
             session.beginConfiguration(); session.sessionPreset = .photo
             guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { throw CocoaError(.featureUnsupported) }
             device = camera
-            session.addInput(try AVCaptureDeviceInput(device: camera)); session.addOutput(output); session.commitConfiguration()
+            if session.inputs.isEmpty {
+                let input = try AVCaptureDeviceInput(device: camera)
+                guard session.canAddInput(input), session.canAddOutput(output) else { throw CocoaError(.featureUnsupported) }
+                session.addInput(input); session.addOutput(output)
+            }
+            session.commitConfiguration()
             let session = session
             await withCheckedContinuation { continuation in DispatchQueue.global(qos: .userInitiated).async { session.startRunning(); continuation.resume() } }
         } catch { session.commitConfiguration(); self.error = error.localizedDescription }
@@ -55,7 +78,7 @@ struct PhotoCaptureView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text(kind == .before ? "Capture the starting condition" : "MatchShot · align with a before photo").font(.headline).foregroundStyle(Brand.navy)
+                Text(kind == .before ? "Capture Before" : "MatchShot · Capture After").font(.title3.bold()).foregroundStyle(Brand.navy)
                 if kind == .after && !beforePhotos.isEmpty {
                     Picker("Before photo", selection: $selectedBeforeID) { ForEach(beforePhotos) { photo in Text(photo.capturedAt.formatted()).tag(Optional(photo.id)) } }.pickerStyle(.menu)
                     HStack { Text("Ghost opacity"); Slider(value: $ghostOpacity, in: 0.1...0.75) }
@@ -68,12 +91,12 @@ struct PhotoCaptureView: View {
                     if camera.error != nil { Text(camera.error ?? "").padding().background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.white) }
                 }.clipShape(RoundedRectangle(cornerRadius: 16))
                 if UIImagePickerController.isSourceTypeAvailable(.camera) { HStack { Button { camera.flashEnabled.toggle() } label: { Image(systemName: camera.flashEnabled ? "bolt.fill" : "bolt.slash") }; Spacer(); Button { camera.capture() } label: { Image(systemName: "circle.inset.filled").font(.system(size: 62)) }; Spacer(); Text(" ") }.padding(.horizontal, 30) }
-                PhotosPicker(selection: $selectedItem, matching: .images) { Label("Import from Photos", systemImage: "photo.on.rectangle") }.buttonStyle(.bordered)
+                PhotosPicker(selection: $selectedItem, matching: .images) { Label("Choose Photo", systemImage: "photo.on.rectangle") }.buttonStyle(.bordered)
                 if kind == .after && beforePhotos.isEmpty { Text("Add a before photo first to use the MatchShot ghost overlay.").font(.caption).foregroundStyle(.secondary) }
                 if !qualityWarning.isEmpty { Label(qualityWarning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
                 if !alignmentGuidance.isEmpty { Label(alignmentGuidance, systemImage: "viewfinder").font(.caption).foregroundStyle(Brand.teal) }
                 Text("Saved \(kind.rawValue) photos").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
-                ScrollView(.horizontal) { HStack { ForEach(job.photos.filter { $0.kind == kind }) { photo in if let image = PhotoStore.image(photo.filename) { ZStack(alignment: .topTrailing) { Image(uiImage: image).resizable().scaledToFill().frame(width: 115, height: 100).clipped().clipShape(RoundedRectangle(cornerRadius: 8)); Button { var photos = job.photos; photos.removeAll { $0.id == photo.id }; job.photos = photos; PhotoStore.delete(photo.filename); if kind == .before && selectedBeforeID == photo.id { selectedBeforeID = beforePhotos.first?.id } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white).shadow(radius: 3) }.padding(4).accessibilityLabel("Remove photo") } } } } }
+                ScrollView(.horizontal) { HStack { ForEach(job.photos.filter { $0.kind == kind }) { photo in if let image = PhotoStore.image(photo.filename) { ZStack(alignment: .topTrailing) { Image(uiImage: image).resizable().scaledToFill().frame(width: 115, height: 100).clipped().clipShape(RoundedRectangle(cornerRadius: 8)); Button { var photos = job.photos; photos.removeAll { $0.id == photo.id }; job.photos = photos; job.technicianConfirmed = false; PhotoStore.delete(photo.filename); if kind == .before && selectedBeforeID == photo.id { selectedBeforeID = beforePhotos.first?.id } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white).shadow(radius: 3) }.padding(4).accessibilityLabel("Remove photo") } } } } }
             }.padding()
         }.navigationTitle(kind == .before ? "Before photos" : "After photos")
             .task { if kind == .after { selectedBeforeID = beforePhotos.first?.id }; await camera.start() }
@@ -87,6 +110,7 @@ struct PhotoCaptureView: View {
             var photos = job.photos
             photos.append(JobPhoto(kind: kind, filename: filename, pairedBeforeID: kind == .after ? selectedBeforeID : nil))
             job.photos = photos
+            job.technicianConfirmed = false
             if job.status == .draft { job.status = .inProgress }
             qualityWarning = ImageQuality.warning(for: image) ?? ""
             if kind == .after, let before = beforePhotos.first(where: { $0.id == selectedBeforeID }), let original = PhotoStore.image(before.filename) {
@@ -123,34 +147,86 @@ struct ReceiptView: View {
     @State private var date = Date()
     @State private var rows: [PriceItem] = []
     @State private var showingCamera = false
+    @State private var processing = false
+    @State private var addedCount = 0
     var body: some View {
-        Form {
-            Section("Receipt") {
-                PhotosPicker(selection: $item, matching: .images) { Label("Choose receipt image", systemImage: "doc.viewfinder") }
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button { showingCamera = true } label: { Label("Take receipt photo", systemImage: "camera") }
-                }
-                if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 240) }
-                if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
-            }
-            if image != nil {
-                Section("Review recognised details") { TextField("Merchant", text: $merchant); DatePicker("Date", selection: $date, displayedComponents: .date); TextField("Receipt number", text: $number); if !detectedTotal.isEmpty { LabeledContent("Detected total", value: detectedTotal) } }
-                Section("Materials") {
-                    ForEach($rows) { $row in HStack { TextField("Item", text: $row.name); TextField("Qty", text: $row.quantity).frame(width: 45).keyboardType(.decimalPad); TextField("Price", text: $row.unitPrice).frame(width: 65).keyboardType(.decimalPad) } }
-                    .onDelete { rows.remove(atOffsets: $0) }
-                    Button("Add item") { rows.append(PriceItem(kind: .material, name: "", unitPrice: "0")) }
-                }
-                Section { PrimaryButton(title: "Add Materials to Job", icon: "plus") { confirm() }.disabled(rows.isEmpty) }
-            }
-        }.navigationTitle("Receipt Scan")
+        Group {
+            if addedCount > 0 { successView }
+            else if processing { VStack(spacing: 22) { Spacer(); Image(systemName: "doc.text.viewfinder").font(.system(size: 62)).foregroundStyle(Brand.blue); Text("Processing receipt").font(.title2.bold()); ProgressView("Reading text and finding items…"); Spacer() }.frame(maxWidth: .infinity) }
+            else if image == nil { startView }
+            else { reviewView }
+        }.navigationTitle(image == nil ? "Add Materials" : "Receipt Details")
             .sheet(isPresented: $showingCamera) { ReceiptCamera { captured in image = captured; Task { await recognise(captured) } } }
             .onChange(of: item) { _, selected in Task { if let data = try? await selected?.loadTransferable(type: Data.self), let value = UIImage(data: data) { image = value; await recognise(value) } } }
     }
+    private var startView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "doc.text.viewfinder").font(.system(size: 60)).foregroundStyle(Brand.navy).frame(width: 100, height: 100).background(Brand.pale, in: RoundedRectangle(cornerRadius: 25))
+            Text("Scan a receipt").font(.title.bold()).foregroundStyle(Brand.navy)
+            Text("Take a photo of your receipt and we'll extract the items and prices.").multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 28)
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Saves you time", systemImage: "clock")
+                Label("Adds items to your job", systemImage: "plus.circle")
+                Label("Review everything before saving", systemImage: "checkmark.circle")
+            }.font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 38)
+            Spacer()
+            if VNDocumentCameraViewController.isSupported {
+                PrimaryButton(title: "Scan Receipt", icon: "camera") { showingCamera = true }.padding(.horizontal)
+            }
+            PhotosPicker(selection: $item, matching: .images) { Label("Choose from Photos", systemImage: "photo.on.rectangle").frame(maxWidth: .infinity).padding(12) }.buttonStyle(.bordered).padding(.horizontal)
+            Spacer().frame(height: 20)
+        }
+    }
+    private var reviewView: some View {
+        Form {
+            Section("Receipt") {
+                if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 220) }
+                if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
+            }
+            Section("Review extracted details") {
+                TextField("Merchant", text: $merchant)
+                DatePicker("Date", selection: $date, displayedComponents: .date)
+                TextField("Receipt number", text: $number)
+                if !detectedTotal.isEmpty { LabeledContent("Receipt total", value: detectedTotal) }
+            }
+            Section("Items found") {
+                ForEach($rows) { $row in
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Item", text: $row.name)
+                        HStack {
+                            TextField("Qty", text: $row.quantity).frame(width: 70).keyboardType(.decimalPad)
+                            TextField("Unit price", text: $row.unitPrice).keyboardType(.decimalPad)
+                        }
+                    }
+                }.onDelete { rows.remove(atOffsets: $0) }
+                Button { rows.append(PriceItem(kind: .material, name: "", unitPrice: "0")) } label: { Label("Add Item", systemImage: "plus") }
+            }
+            Section {
+                PrimaryButton(title: "Add Items to Job", icon: "checkmark") { confirm() }.disabled(!ReceiptParser.canConfirm(rows))
+                if !ReceiptParser.canConfirm(rows) { Text("Review each item's name, quantity and price.").font(.caption).foregroundStyle(.secondary) }
+                Button("Retake Receipt") { image = nil; rows = []; showingCamera = true }
+            }
+        }
+    }
+    private var successView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 75)).foregroundStyle(Brand.teal)
+            Text("Materials added").font(.title.bold()).foregroundStyle(Brand.navy)
+            Text("\(addedCount) item\(addedCount == 1 ? "" : "s") added to this job.").foregroundStyle(.secondary)
+            Spacer()
+            NavigationLink { PricingView(job: job) } label: { Text("View in Materials").font(.headline).frame(maxWidth: .infinity).padding(14).foregroundStyle(.white).background(Brand.blue, in: RoundedRectangle(cornerRadius: 12)) }.padding(.horizontal)
+            Button("Scan Another Receipt") { addedCount = 0; image = nil; rows = []; message = "" }.padding(.bottom, 25)
+        }
+    }
     private func recognise(_ image: UIImage) async {
+        processing = true
+        defer { processing = false }
         guard let cg = image.cgImage else { return }
         let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.usesLanguageCorrection = true
         do {
-            try VNImageRequestHandler(cgImage: cg).perform([request])
+            try VNImageRequestHandler(cgImage: cg, orientation: image.imageOrientation.cgImagePropertyOrientation).perform([request])
             let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
             let parsed = ReceiptParser.parse(lines)
             merchant = parsed.merchant; number = parsed.number; rows = parsed.items; date = parsed.date ?? Date(); detectedTotal = parsed.total
@@ -158,33 +234,45 @@ struct ReceiptView: View {
         } catch { message = "Text recognition failed. You can add and edit materials manually." }
     }
     private func confirm() {
-        guard let image, let filename = try? PhotoStore.save(image) else { return }
-        var items = job.items; items.append(contentsOf: rows.filter { !$0.name.isEmpty }); job.items = items
-        var receipts = job.receipts; receipts.append(ReceiptRecord(merchant: merchant, date: date, number: number, filename: filename, items: rows, confirmed: true)); job.receipts = receipts
-        rows = []; self.image = nil; message = "Materials added to job."
+        guard ReceiptParser.canConfirm(rows), let image, let filename = try? PhotoStore.save(image) else { return }
+        var record = ReceiptRecord(merchant: merchant, date: date, number: number, filename: filename, items: rows, confirmed: true)
+        let confirmed = rows.map { row -> PriceItem in var item = row; item.sourceReceiptID = record.id; return item }
+        record.items = confirmed
+        var items = job.items; items.append(contentsOf: confirmed); job.items = items
+        job.technicianConfirmed = false
+        var receipts = job.receipts; receipts.append(record); job.receipts = receipts
+        addedCount = confirmed.count; rows = []; self.image = nil
     }
 }
 
 struct ReceiptCamera: UIViewControllerRepresentable {
     let completion: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController(); picker.sourceType = .camera; picker.delegate = context.coordinator; return picker
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let camera = VNDocumentCameraViewController(); camera.delegate = context.coordinator; return camera
     }
-    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+    func updateUIViewController(_ controller: VNDocumentCameraViewController, context: Context) {}
     func makeCoordinator() -> Coordinator { Coordinator(completion: completion, dismiss: dismiss) }
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
         let completion: (UIImage) -> Void
         let dismiss: DismissAction
         init(completion: @escaping (UIImage) -> Void, dismiss: DismissAction) { self.completion = completion; self.dismiss = dismiss }
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
-            if let image = info[.originalImage] as? UIImage { completion(image) }; dismiss()
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            if scan.pageCount > 0 { completion(scan.imageOfPage(at: 0)) }; dismiss()
         }
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { dismiss() }
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { dismiss() }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { dismiss() }
     }
 }
 
 enum ReceiptParser {
+    static func canConfirm(_ rows: [PriceItem]) -> Bool {
+        !rows.isEmpty && rows.allSatisfy {
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && Money.isValid($0.quantity) && Money.parse($0.quantity) > 0
+                && Money.isValid($0.unitPrice)
+        }
+    }
     static func parse(_ lines: [String]) -> (merchant: String, number: String, date: Date?, total: String, items: [PriceItem]) {
         let merchant = lines.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
         let number = lines.first(where: { $0.lowercased().contains("receipt") || $0.lowercased().contains("invoice") })?.components(separatedBy: .whitespaces).last ?? ""
