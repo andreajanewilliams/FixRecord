@@ -45,6 +45,17 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(defaults.category(), "Appliance Repair")
     }
 
+    func testLegacyOtherCategoryRemainsSelectableAndSeedsLastUsed() {
+        let (defaults, _) = isolatedDefaults()
+        let existing = SampleJob.make()
+        existing.isSample = false
+        existing.category = "Other"
+        defaults.bootstrap(from: [existing])
+        XCTAssertEqual(defaults.category(), "Other")
+        XCTAssertTrue(defaults.state.customCategories.isEmpty)
+        XCTAssertEqual(existing.category, "Other")
+    }
+
     func testExplicitDefaultsOutrankBusinessProfileAndOneOffJobValues() {
         let (defaults, _) = isolatedDefaults()
         let profile = BusinessProfile()
@@ -79,6 +90,8 @@ final class FixRecordTests: XCTestCase {
         XCTAssertTrue(defaults.renameCustomCategory("Appliance Repair", to: "Appliance Service"))
         XCTAssertEqual(defaults.category(), "Appliance Service")
         XCTAssertFalse(defaults.renameCustomCategory("Appliance Service", to: "Plumbing"))
+        XCTAssertFalse(defaults.renameCustomCategory("Appliance Service", to: "No category"))
+        XCTAssertNil(defaults.addCustomCategory("no CATEGORY"))
     }
 
     func testDeletingCustomCategoryKeepsHistoricalJobValue() {

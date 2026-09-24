@@ -64,7 +64,7 @@ struct JobDefaultsState: Codable, Equatable {
     func bootstrap(from jobs: [Job]) {
         guard !state.hasRecordedJob, let latest = jobs.filter({ !$0.isSample }).max(by: { $0.createdAt < $1.createdAt }) else { return }
         let category = Self.cleaned(latest.category)
-        if !category.isEmpty && !JobCategories.builtIn.contains(where: { Self.same($0, category) }) {
+        if !category.isEmpty && !Self.same(category, "Other") && !JobCategories.builtIn.contains(where: { Self.same($0, category) }) {
             _ = addCustomCategory(category)
         }
         remember(technician: latest.technician, category: category)
@@ -75,7 +75,7 @@ struct JobDefaultsState: Codable, Equatable {
         guard !name.isEmpty else { return nil }
         if let builtIn = JobCategories.builtIn.first(where: { Self.same($0, name) }) { return builtIn }
         if let existing = state.customCategories.first(where: { Self.same($0, name) }) { return existing }
-        guard !Self.same(name, "Other") else { return nil }
+        guard !Self.same(name, "Other"), !Self.same(name, "No category") else { return nil }
         state.customCategories.append(name)
         return name
     }
@@ -83,7 +83,7 @@ struct JobDefaultsState: Codable, Equatable {
     @discardableResult func renameCustomCategory(_ old: String, to new: String) -> Bool {
         let new = Self.cleaned(new)
         guard let index = state.customCategories.firstIndex(where: { Self.same($0, old) }),
-              !new.isEmpty, !Self.same(new, "Other"),
+              !new.isEmpty, !Self.same(new, "Other"), !Self.same(new, "No category"),
               !JobCategories.builtIn.contains(where: { Self.same($0, new) }),
               !state.customCategories.enumerated().contains(where: { $0.offset != index && Self.same($0.element, new) }) else { return false }
         let previous = state.customCategories[index]
@@ -104,7 +104,7 @@ struct JobDefaultsState: Codable, Equatable {
     }
 
     private func selectable(_ name: String) -> Bool {
-        JobCategories.builtIn.contains(where: { Self.same($0, name) }) || state.customCategories.contains(where: { Self.same($0, name) })
+        Self.same(name, "Other") || JobCategories.builtIn.contains(where: { Self.same($0, name) }) || state.customCategories.contains(where: { Self.same($0, name) })
     }
     private static func cleaned(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
     private static func same(_ first: String, _ second: String) -> Bool { first.caseInsensitiveCompare(second) == .orderedSame }

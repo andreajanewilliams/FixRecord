@@ -258,9 +258,10 @@ struct JobTextField: View {
 }
 
 struct CategorySelectionSheet: View {
+    private enum Choice: Equatable { case none, category(String), addCustom }
     @Environment(\.dismiss) private var dismiss
     @State private var defaults = JobDefaultsService.shared
-    @State private var selected = ""
+    @State private var selected: Choice = .none
     @State private var customName = ""
     @State private var error = ""
     let value: String
@@ -270,15 +271,15 @@ struct CategorySelectionSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    categoryRow("No category", value: "")
-                    ForEach(JobCategories.builtIn, id: \.self) { categoryRow($0, value: $0) }
+                    categoryRow("No category", choice: .none)
+                    ForEach(JobCategories.builtIn, id: \.self) { categoryRow($0, choice: .category($0)) }
                     if !defaults.state.customCategories.isEmpty {
                         Text("Custom Categories").font(.caption).foregroundStyle(.secondary).padding(.top, 20).padding(.bottom, 7)
-                        ForEach(defaults.state.customCategories, id: \.self) { categoryRow($0, value: $0) }
+                        ForEach(defaults.state.customCategories, id: \.self) { categoryRow($0, choice: .category($0)) }
                     }
-                    if !value.isEmpty && !known { categoryRow(value, value: value) }
-                    categoryRow("Other", value: "Other")
-                    if selected == "Other" {
+                    if !value.isEmpty && !known { categoryRow(value == "Other" ? "Other (saved category)" : value, choice: .category(value)) }
+                    categoryRow("Other", choice: .addCustom)
+                    if selected == .addCustom {
                         TextField("Custom category", text: $customName).textInputAutocapitalization(.words)
                             .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 12)
                         Text("Add your own category if it’s not listed.").font(.caption).foregroundStyle(.secondary).padding(.top, 6)
@@ -288,25 +289,28 @@ struct CategorySelectionSheet: View {
                 .safeAreaInset(edge: .bottom) { PrimaryButton(title: "Done", icon: "checkmark") { finish() }.padding(18).background(Brand.background) }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }.presentationDetents([.fraction(0.8), .large])
-            .onAppear { selected = value }
+            .onAppear { selected = value.isEmpty ? .none : .category(value) }
             .alert("Choose another name", isPresented: Binding(get: { !error.isEmpty }, set: { if !$0 { error = "" } })) { Button("OK", role: .cancel) { error = "" } } message: { Text(error) }
     }
-    private func categoryRow(_ title: String, value: String) -> some View {
+    private func categoryRow(_ title: String, choice: Choice) -> some View {
         VStack(spacing: 0) {
-            Button { selected = value } label: {
-                HStack { Text(title); Spacer(); if selected == value { Image(systemName: "checkmark").fontWeight(.bold).foregroundStyle(Brand.blue) } }
-                    .foregroundStyle(selected == value ? Brand.blue : Brand.navy)
+            Button { selected = choice } label: {
+                HStack { Text(title); Spacer(); if selected == choice { Image(systemName: "checkmark").fontWeight(.bold).foregroundStyle(Brand.blue) } }
+                    .foregroundStyle(selected == choice ? Brand.blue : Brand.navy)
                     .padding(.horizontal, 12).padding(.vertical, 13)
-                    .background(selected == value ? Brand.pale : .white, in: RoundedRectangle(cornerRadius: 9))
+                    .background(selected == choice ? Brand.pale : .white, in: RoundedRectangle(cornerRadius: 9))
             }.buttonStyle(.plain)
             Divider().padding(.leading, 12)
         }
     }
     private func finish() {
-        if selected == "Other" {
-            guard let value = defaults.addCustomCategory(customName) else { error = "Enter a category name that is not ‘Other’."; return }
+        switch selected {
+        case .addCustom:
+            guard let value = defaults.addCustomCategory(customName) else { error = "Enter a category name other than ‘Other’ or ‘No category’."; return }
             onSelect(value)
-        } else { onSelect(selected) }
+        case .none: onSelect("")
+        case .category(let value): onSelect(value)
+        }
         dismiss()
     }
 }
