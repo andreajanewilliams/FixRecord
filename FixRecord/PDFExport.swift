@@ -67,7 +67,7 @@ struct ExportView: View {
                 NavigationLink { kind == .invoice ? AnyView(PricingView(job: job)) : AnyView(NotesView(job: job)) } label: { Text("Edit").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
                 Button("Export") { showingShare = true }.frame(maxWidth: .infinity).buttonStyle(.borderedProminent).disabled(url == nil)
             }.padding(.horizontal)
-            NavigationLink("Edit Template") { TemplatesView() }.font(.caption).padding(.bottom, 6)
+            NavigationLink("Edit This Job’s Documents") { JobPresetSettingsView(job: job) }.font(.caption).padding(.bottom, 6)
         }
         .navigationTitle("Preview").navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingShare) { if let url { NavigationStack { ShareOptionsView(url: url, packURL: packURL, data: data, title: job.number) } } }

@@ -574,6 +574,8 @@ struct PresetEditorView: View {
     @StateObject private var entitlements = EntitlementService.shared
     @State private var selectedLogo: PhotosPickerItem?
     @State private var showingUpgrade = false
+    @State private var loadingLogo = false
+    @State private var logoError = ""
 
     private let editName: Bool
     private let onSave: (SavedPreset) -> Void
@@ -592,9 +594,11 @@ struct PresetEditorView: View {
                     Image(uiImage: image).resizable().scaledToFit().frame(height: 64)
                 }
                 if entitlements.isPro {
-                    PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images)
+                    PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images).disabled(loadingLogo)
                     if !preset.business.logoFilename.isEmpty { Button("Remove logo") { preset.business.logoFilename = "" } }
                 } else { Button("Choose logo · Pro") { showingUpgrade = true } }
+                if loadingLogo { ProgressView("Loading logo…") }
+                if !logoError.isEmpty { Text(logoError).font(.caption).foregroundStyle(.red) }
                 TextField("Business name", text: $preset.business.businessName)
                 TextField("Owner / contractor", text: $preset.business.ownerName)
                 TextField("Email", text: $preset.business.email).keyboardType(.emailAddress)
@@ -641,16 +645,27 @@ struct PresetEditorView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { onSave(preset); dismiss() }
-                        .disabled(editName && preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(loadingLogo || (editName && preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
             }
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
             .task { await entitlements.refresh() }
             .onChange(of: selectedLogo) { _, item in
+                guard let item else { return }
+                loadingLogo = true
+                logoError = ""
                 Task {
-                    if entitlements.isPro, let data = try? await item?.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data), let name = try? PhotoStore.save(image) {
-                        preset.business.logoFilename = name
+                    defer { loadingLogo = false }
+                    do {
+                        guard entitlements.isPro,
+                              let data = try await item.loadTransferable(type: Data.self),
+                              let image = UIImage(data: data) else {
+                            logoError = "The selected image could not be loaded. Try another photo."
+                            return
+                        }
+                        preset.business.logoFilename = try PhotoStore.save(image)
+                    } catch {
+                        logoError = "The selected image could not be saved. Try another photo."
                     }
                 }
             }
