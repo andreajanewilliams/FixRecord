@@ -437,7 +437,32 @@ struct JobDetailView: View {
                     Text(job.number).font(.caption).foregroundStyle(.secondary)
                     if job.isSample { Label("EXAMPLE JOB", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
                 }
-                Picker("Status", selection: Binding(get: { job.status }, set: { job.status = $0 })) { ForEach(JobStatus.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Job progress").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Menu {
+                        ForEach(JobStatus.allCases, id: \.self) { status in
+                            Button { job.status = status } label: {
+                                if job.status == status { Label(status.rawValue, systemImage: "checkmark") }
+                                else { Text(status.rawValue) }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: job.status == .completed ? "checkmark.circle.fill" : "circle.inset.filled")
+                                .font(.title3).foregroundStyle(job.status == .completed ? Brand.teal : Brand.blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(job.status.rawValue).font(.headline).foregroundStyle(Brand.navy)
+                                Text(job.status == .draft ? "Ready to start" : job.status == .inProgress ? "Work underway" : "Work finished")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("Change").font(.subheadline).foregroundStyle(Brand.blue)
+                            Image(systemName: "chevron.down").font(.caption).foregroundStyle(Brand.blue)
+                        }
+                        .padding(14).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                    }
+                    .accessibilityLabel("Job progress, \(job.status.rawValue). Change status")
+                }
                 NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Add or review before and after", icon: "photo.on.rectangle.angled") }
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }
