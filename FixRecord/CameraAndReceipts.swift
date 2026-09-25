@@ -147,6 +147,7 @@ struct ReceiptView: View {
     @State private var date = Date()
     @State private var rows: [PriceItem] = []
     @State private var showingCamera = false
+    @State private var pendingCapture: UIImage?
     @State private var processing = false
     @State private var addedCount = 0
     var body: some View {
@@ -156,7 +157,14 @@ struct ReceiptView: View {
             else if image == nil { startView }
             else { reviewView }
         }.navigationTitle(image == nil ? "Add Materials" : "Receipt Details")
-            .sheet(isPresented: $showingCamera) { ReceiptCamera { captured in image = captured; Task { await recognise(captured) } } }
+            .sheet(isPresented: $showingCamera, onDismiss: {
+                guard let captured = pendingCapture else { return }
+                pendingCapture = nil
+                image = captured
+                Task { await recognise(captured) }
+            }) {
+                ReceiptCamera { captured in pendingCapture = captured } onError: { message = $0 }
+            }
             .onChange(of: item) { _, selected in Task { if let data = try? await selected?.loadTransferable(type: Data.self), let value = UIImage(data: data) { image = value; await recognise(value) } } }
     }
     private var startView: some View {
@@ -165,6 +173,8 @@ struct ReceiptView: View {
             Image(systemName: "doc.text.viewfinder").font(.system(size: 60)).foregroundStyle(Brand.navy).frame(width: 100, height: 100).background(Brand.pale, in: RoundedRectangle(cornerRadius: 25))
             Text("Scan a receipt").font(.title.bold()).foregroundStyle(Brand.navy)
             Text("Take a photo of your receipt and we'll extract the items and prices.").multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 28)
+            Text("After capturing, tap Save in the scanner.").font(.subheadline).foregroundStyle(.secondary)
+            if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).padding(.horizontal) }
             VStack(alignment: .leading, spacing: 12) {
                 Label("Saves you time", systemImage: "clock")
                 Label("Adds items to your job", systemImage: "plus.circle")
@@ -191,6 +201,7 @@ struct ReceiptView: View {
                 if !detectedTotal.isEmpty { LabeledContent("Receipt total", value: detectedTotal) }
             }
             Section("Items found") {
+                if rows.isEmpty { Text("No items found. Add them manually or retake the receipt.").font(.subheadline).foregroundStyle(.secondary) }
                 ForEach($rows) { $row in
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("Item", text: $row.name)
@@ -205,7 +216,7 @@ struct ReceiptView: View {
             Section {
                 PrimaryButton(title: "Add Items to Job", icon: "checkmark") { confirm() }.disabled(!ReceiptParser.canConfirm(rows))
                 if !ReceiptParser.canConfirm(rows) { Text("Review each item's name, quantity and price.").font(.caption).foregroundStyle(.secondary) }
-                Button("Retake Receipt") { image = nil; rows = []; showingCamera = true }
+                Button("Retake Receipt") { image = nil; rows = []; message = ""; showingCamera = true }
             }
         }
     }
@@ -223,14 +234,19 @@ struct ReceiptView: View {
     private func recognise(_ image: UIImage) async {
         processing = true
         defer { processing = false }
-        guard let cg = image.cgImage else { return }
-        let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate; request.usesLanguageCorrection = true
+        guard let cg = image.cgImage else { message = "Could not read this image. Please retake it or add items manually."; return }
+        let orientation = image.imageOrientation.cgImagePropertyOrientation
         do {
-            try VNImageRequestHandler(cgImage: cg, orientation: image.imageOrientation.cgImagePropertyOrientation).perform([request])
-            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            let lines = try await Task.detached(priority: .userInitiated) {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                try VNImageRequestHandler(cgImage: cg, orientation: orientation).perform([request])
+                return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            }.value
             let parsed = ReceiptParser.parse(lines)
             merchant = parsed.merchant; number = parsed.number; rows = parsed.items; date = parsed.date ?? Date(); detectedTotal = parsed.total
-            message = "Review every field before adding materials. OCR can make mistakes."
+            message = rows.isEmpty ? "No items were recognised. Add them manually or retake the receipt." : "Review every field before adding materials. OCR can make mistakes."
         } catch { message = "Text recognition failed. You can add and edit materials manually." }
     }
     private func confirm() {
@@ -247,21 +263,28 @@ struct ReceiptView: View {
 
 struct ReceiptCamera: UIViewControllerRepresentable {
     let completion: (UIImage) -> Void
+    let onError: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
         let camera = VNDocumentCameraViewController(); camera.delegate = context.coordinator; return camera
     }
     func updateUIViewController(_ controller: VNDocumentCameraViewController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(completion: completion, dismiss: dismiss) }
+    func makeCoordinator() -> Coordinator { Coordinator(completion: completion, onError: onError, dismiss: dismiss) }
     final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
         let completion: (UIImage) -> Void
+        let onError: (String) -> Void
         let dismiss: DismissAction
-        init(completion: @escaping (UIImage) -> Void, dismiss: DismissAction) { self.completion = completion; self.dismiss = dismiss }
+        init(completion: @escaping (UIImage) -> Void, onError: @escaping (String) -> Void, dismiss: DismissAction) { self.completion = completion; self.onError = onError; self.dismiss = dismiss }
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
-            if scan.pageCount > 0 { completion(scan.imageOfPage(at: 0)) }; dismiss()
+            if scan.pageCount > 0 { completion(scan.imageOfPage(at: 0)) }
+            else { onError("No receipt page was saved. Please scan it again.") }
+            dismiss()
         }
         func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { dismiss() }
-        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { dismiss() }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
+            onError("Could not scan the receipt: \(error.localizedDescription)")
+            dismiss()
+        }
     }
 }
 
