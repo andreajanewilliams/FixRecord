@@ -402,9 +402,7 @@ struct JobDetailView: View {
                     if job.isSample { Label("EXAMPLE JOB", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
                 }
                 Picker("Status", selection: Binding(get: { job.status }, set: { job.status = $0 })) { ForEach(JobStatus.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
-                NavigationLink { PhotoCaptureView(job: job, kind: .before) } label: { feature("Capture Before", subtitle: "Optional photo of the starting condition", icon: "camera") }
-                NavigationLink { PhotoCaptureView(job: job, kind: .after) } label: { feature("Capture After · MatchShot", subtitle: "Optional photo of the finished work", icon: "square.on.square") }
-                NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Review before and after", icon: "photo.on.rectangle.angled") }
+                NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Add or review before and after", icon: "photo.on.rectangle.angled") }
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }
                 NavigationLink { ReceiptView(job: job) } label: { feature("Scan Receipt", subtitle: "Review suggestions before adding", icon: "doc.viewfinder") }
