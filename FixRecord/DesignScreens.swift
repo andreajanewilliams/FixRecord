@@ -118,7 +118,11 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Brand.navy)
             VStack(alignment: .leading, spacing: 15) {
-                Text("Kitchen Sink Repair").font(.title2.bold()).foregroundStyle(Brand.navy)
+                Text("Kitchen Sink Repair")
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Brand.navy)
+                    .frame(maxWidth: .infinity)
                 HStack(spacing: 12) {
                     photo("sample-before-repair-v2", "Before")
                     photo("sample-after-repair-v2", "After")
