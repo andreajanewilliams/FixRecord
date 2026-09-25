@@ -113,34 +113,34 @@ struct OnboardingView: View {
 
     private var exampleJob: some View {
         VStack(spacing: 18) {
-            Text("Explore an example job.")
+            Text("Try an example job")
                 .font(.system(size: 30, weight: .bold))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Brand.navy)
-            Text("See how photos, work details and materials become a finished report and invoice.")
+            Text("See a finished repair.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 32)
             VStack(alignment: .leading, spacing: 15) {
-                HStack {
-                    Label("EXAMPLE JOB", systemImage: "sparkles")
-                        .font(.caption.bold()).foregroundStyle(Brand.blue)
-                    Spacer()
-                    Text("Completed").font(.caption.bold()).foregroundStyle(Brand.teal)
-                }
                 Text("Kitchen Sink Repair").font(.title2.bold()).foregroundStyle(Brand.navy)
                 HStack(spacing: 12) {
                     photo("sample-before-repair-v2", "Before")
                     photo("sample-after-repair-v2", "After")
                 }.frame(maxWidth: .infinity)
-                Label("Work report and invoice ready to preview", systemImage: "doc.text")
-                    .font(.subheadline).foregroundStyle(Brand.navy)
+                HStack(spacing: 8) {
+                    Label("Report", systemImage: "doc.text")
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(.white, in: Capsule())
+                    Label("Invoice", systemImage: "doc.plaintext")
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(.white, in: Capsule())
+                }
+                .font(.caption.bold())
+                .foregroundStyle(Brand.navy)
+                .frame(maxWidth: .infinity)
             }
             .padding(20)
             .background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
             .padding(.horizontal, 24)
-            Text("You can delete the example at any time.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
