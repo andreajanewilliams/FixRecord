@@ -117,26 +117,12 @@ struct OnboardingView: View {
                 .font(.system(size: 30, weight: .bold))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(Brand.navy)
-            Text("See a finished repair.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 15) {
                 Text("Kitchen Sink Repair").font(.title2.bold()).foregroundStyle(Brand.navy)
                 HStack(spacing: 12) {
                     photo("sample-before-repair-v2", "Before")
                     photo("sample-after-repair-v2", "After")
                 }.frame(maxWidth: .infinity)
-                HStack(spacing: 8) {
-                    Label("Report", systemImage: "doc.text")
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(.white, in: Capsule())
-                    Label("Invoice", systemImage: "doc.plaintext")
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(.white, in: Capsule())
-                }
-                .font(.caption.bold())
-                .foregroundStyle(Brand.navy)
-                .frame(maxWidth: .infinity)
             }
             .padding(20)
             .background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
