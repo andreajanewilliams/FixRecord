@@ -82,6 +82,17 @@ test('rejects requests with no work evidence or invalid image data before spendi
   }
 });
 
+test('limits an IP before decoding another photo', async () => {
+  for (let count = 0; count < 31; count++) {
+    const req = request({ beforeImage: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') });
+    req.socket.remoteAddress = '192.0.2.77';
+    req.body.revenueCatAppUserId = req.body.installId;
+    const res = response();
+    await handler(req, res);
+    assert.equal(res.statusCode, count < 30 ? 400 : 429);
+  }
+});
+
 test('returns a setup error without an API key and rejects incomplete model output', async () => {
   const req = request({ roughNotes: 'Replaced the washer.' });
   req.body.revenueCatAppUserId = req.body.installId;

@@ -49,10 +49,12 @@ enum AIService {
             ?? photos.last { $0.kind == .before && PhotoStore.image($0.filename) != nil }
         return (before, after)
     }
-    static func hasEvidence(job: Job) -> Bool {
-        if !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+    static func hasReadablePhoto(job: Job) -> Bool {
         let photos = selectedPhotos(for: job)
         return photos.before != nil || photos.after != nil
+    }
+    static func hasEvidence(job: Job) -> Bool {
+        !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasReadablePhoto(job: job)
     }
     private static func encodedPhoto(_ photo: JobPhoto?) -> String? {
         guard let photo, let image = PhotoStore.image(photo.filename), image.size.width > 0, image.size.height > 0 else { return nil }
@@ -103,14 +105,16 @@ struct NotesView: View {
     @State private var draft = ""
     @State private var message = ""
     @State private var busy = false
+    @State private var hasPhotoEvidence = false
     var body: some View {
-        Form {
+        let hasEvidence = !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasPhotoEvidence
+        return Form {
             Section { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue) }
             Section { VoiceTextInput(title: "Work Completed", placeholder: "Describe what you completed…", text: $job.roughNote) }
             Section {
                 Button { Task { await improve() } } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }
-                    .disabled(busy || !AIService.isConfigured || !AIService.hasEvidence(job: job))
-                if !AIService.hasEvidence(job: job) {
+                    .disabled(busy || !AIService.isConfigured || !hasEvidence)
+                if !hasEvidence {
                     Text("Add a work note or a Before/After photo to use AI.").font(.caption).foregroundStyle(.secondary)
                 } else if !AIService.isConfigured {
                     Text("AI writing will be available after setup.").font(.caption).foregroundStyle(.secondary)
@@ -129,6 +133,8 @@ struct NotesView: View {
             }
             if !job.professionalNote.isEmpty { Section("Approved wording") { TextEditor(text: $job.professionalNote).frame(minHeight: 110) } }
         }.navigationTitle("Work Details")
+            .onAppear { hasPhotoEvidence = AIService.hasReadablePhoto(job: job) }
+            .onChange(of: job.photosData) { _, _ in hasPhotoEvidence = AIService.hasReadablePhoto(job: job) }
             .onChange(of: job.issue) { _, _ in job.technicianConfirmed = false }
             .onChange(of: job.roughNote) { _, _ in job.technicianConfirmed = false }
             .onChange(of: job.professionalNote) { _, _ in job.technicianConfirmed = false }
