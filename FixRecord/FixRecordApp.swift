@@ -43,14 +43,14 @@ struct RootView: View {
     @State private var newJob = false
     @State private var selectedJob: Job?
     @State private var pendingJob: Job?
-    @State private var pendingExampleJob: Job?
     @State private var exampleError: String?
     @State private var selection = 0
+    @State private var homeFilter: JobFilter = .all
     var profile: BusinessProfile? { profiles.first }
     var body: some View {
         TabView(selection: $selection) {
             NavigationStack {
-                HomeView(jobs: jobs, newJob: $newJob, selectedJob: $selectedJob)
+                HomeView(jobs: jobs, newJob: $newJob, selectedJob: $selectedJob, filter: $homeFilter)
                     .navigationDestination(item: $selectedJob) { JobDetailView(job: $0) }
             }.tabItem { Label("Jobs", systemImage: "house.fill") }.tag(0)
             NavigationStack { TemplatesView() }.tabItem { Label("Templates", systemImage: "doc.text") }.tag(1)
@@ -59,15 +59,12 @@ struct RootView: View {
         .fullScreenCover(isPresented: $newJob, onDismiss: {
             if let pendingJob { selectedJob = pendingJob; self.pendingJob = nil }
         }) { NavigationStack { CreateJobView(profile: profile) { job in pendingJob = job; newJob = false } } }
-        .fullScreenCover(isPresented: Binding(get: { !didCompleteOnboarding && !ProcessInfo.processInfo.arguments.contains("-skip-onboarding") }, set: { if !$0 { didCompleteOnboarding = true } }), onDismiss: {
-            if let pendingExampleJob { selectedJob = pendingExampleJob; self.pendingExampleJob = nil }
-        }) {
+        .fullScreenCover(isPresented: Binding(get: { !didCompleteOnboarding && !ProcessInfo.processInfo.arguments.contains("-skip-onboarding") }, set: { if !$0 { didCompleteOnboarding = true } })) {
             OnboardingView { choice in
                 switch choice {
                 case .exampleJob:
-                    let example = jobs.first(where: { $0.isSample }) ?? SampleJob.make()
                     if !jobs.contains(where: { $0.isSample }) {
-                        context.insert(example)
+                        context.insert(SampleJob.make())
                         do { try context.save() }
                         catch {
                             context.rollback()
@@ -75,9 +72,12 @@ struct RootView: View {
                             return
                         }
                     }
-                    pendingExampleJob = example
+                    selectedJob = nil
+                    homeFilter = .all
+                    selection = 0
                     didCompleteOnboarding = true
                 case .createJob:
+                    selection = 0
                     didCompleteOnboarding = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { newJob = true }
                 }
@@ -97,10 +97,10 @@ struct RootView: View {
 struct HomeView: View {
     @Environment(\.modelContext) private var context
     @State private var jobToDelete: Job?
-    @State private var filter: JobFilter = .all
     let jobs: [Job]
     @Binding var newJob: Bool
     @Binding var selectedJob: Job?
+    @Binding var filter: JobFilter
     private var visibleJobs: [Job] { jobs.filter { filter == .all || $0.status == filter.status } }
     var body: some View {
         ScrollView {

@@ -428,10 +428,16 @@ struct ManageCustomCategoriesView: View {
 struct DataManagementView: View {
     @Environment(\.modelContext) private var context
     @Query private var jobs: [Job]
+    #if DEBUG
+    @AppStorage("didCompleteOnboarding") private var didCompleteOnboarding = false
+    #endif
     var body: some View {
         List {
             Section("On this device") { Text("Jobs and photos are stored locally. Export PDFs before removing the app.") }
             Section("Example") { Button("Add Example Job") { if !jobs.contains(where: { $0.isSample }) { context.insert(SampleJob.make()) } }; Text("The example is clearly labelled and can be removed from Jobs.").font(.caption).foregroundStyle(.secondary) }
+            #if DEBUG
+            Section("Testing") { Button("Replay Onboarding") { didCompleteOnboarding = false } }
+            #endif
         }.navigationTitle("Data Management")
     }
 }
