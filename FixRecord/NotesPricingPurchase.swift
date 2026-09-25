@@ -88,6 +88,9 @@ struct PricingView: View {
                 }.padding(.vertical, 3)
             }
             Button { var items = job.items; items.append(PriceItem(kind: kind, name: "", unitPrice: "0")); job.items = items } label: { Label("Add \(kind.rawValue.capitalized)", systemImage: "plus") }
+            if kind == .material {
+                NavigationLink { ReceiptView(job: job) } label: { Label("Scan receipt", systemImage: "doc.viewfinder") }
+            }
         }
     }
     private func itemBinding(_ id: UUID, _ keyPath: WritableKeyPath<PriceItem, String>) -> Binding<String> {

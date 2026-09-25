@@ -137,6 +137,7 @@ enum ImageQuality {
 }
 
 struct ReceiptView: View {
+    @Environment(\.dismiss) private var dismiss
     @Bindable var job: Job
     @State private var item: PhotosPickerItem?
     @State private var image: UIImage?
@@ -236,7 +237,7 @@ struct ReceiptView: View {
             Text("Materials added").font(.title.bold()).foregroundStyle(Brand.navy)
             Text("\(addedCount) item\(addedCount == 1 ? "" : "s") added to this job.").foregroundStyle(.secondary)
             Spacer()
-            NavigationLink { PricingView(job: job) } label: { Text("View in Materials").font(.headline).frame(maxWidth: .infinity).padding(14).foregroundStyle(.white).background(Brand.blue, in: RoundedRectangle(cornerRadius: 12)) }.padding(.horizontal)
+            Button { dismiss() } label: { Text("View in Materials").font(.headline).frame(maxWidth: .infinity).padding(14).foregroundStyle(.white).background(Brand.blue, in: RoundedRectangle(cornerRadius: 12)) }.padding(.horizontal)
             Button("Scan Another Receipt") { addedCount = 0; image = nil; rows = []; message = "" }.padding(.bottom, 25)
         }
     }
