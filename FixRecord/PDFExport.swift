@@ -24,7 +24,6 @@ struct PDFFileDocument: FileDocument {
 }
 
 struct ExportView: View {
-    @Environment(\.modelContext) private var context
     @Query private var profiles: [BusinessProfile]
     @Bindable var job: Job
     @State private var kind: ExportKind = .report
@@ -34,52 +33,112 @@ struct ExportView: View {
     @State private var error = ""
     @State private var showingShare = false
     @State private var showingUpgrade = false
-    @State private var showingBusiness = false
-    @State private var dismissedBusinessPrompt = false
+    @State private var store = PresetStore.shared
+    @State private var editingJobPreset: SavedPreset?
+    @State private var creatingPreset: SavedPreset?
+    @State private var pendingPreset: SavedPreset?
     @AppStorage("showPhotosInWorkReport") private var showPhotosInWorkReport = true
     @StateObject private var entitlements = EntitlementService.shared
     private var profile: BusinessProfile? { profiles.first }
     private var renderProfile: BusinessProfile? { job.documentProfile(fallback: profile) }
+    private var hasBusinessName: Bool { renderProfile?.businessName.isEmpty == false || !job.businessName.isEmpty }
 
     var body: some View {
         VStack(spacing: 10) {
             Picker("Document", selection: $kind) { ForEach(ExportKind.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).padding(.horizontal)
-            if renderProfile?.businessName.isEmpty != false && !dismissedBusinessPrompt {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) { Text("Personalise your documents").font(.subheadline.bold()); Text("Add your business details.").font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    if job.documentPreset != nil {
-                        NavigationLink("Add Details") { JobPresetSettingsView(job: job) }.font(.caption.bold())
-                    } else {
-                        Button("Add Details") { if profile == nil { context.insert(BusinessProfile()) }; showingBusiness = true }.font(.caption.bold())
-                    }
-                    Button("Not Now") { dismissedBusinessPrompt = true }.font(.caption)
-                }.padding(10).background(Brand.pale, in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal)
-            }
+            documentSetup.padding(.horizontal)
             if kind == .pack && !entitlements.isPro {
                 ContentUnavailableView("Client Pack is Pro", systemImage: "lock.doc", description: Text("Work Reports and Invoices remain free."))
                 Button("Upgrade to Pro") { showingUpgrade = true }.buttonStyle(.borderedProminent)
             } else if data.isEmpty {
                 ContentUnavailableView("No preview", systemImage: "doc", description: Text(error))
             } else { PDFPreview(data: data) }
-            HStack(spacing: 12) {
-                NavigationLink { kind == .invoice ? AnyView(PricingView(job: job)) : AnyView(NotesView(job: job)) } label: { Text("Edit").frame(maxWidth: .infinity) }.buttonStyle(.bordered)
-                Button("Export") { showingShare = true }.frame(maxWidth: .infinity).buttonStyle(.borderedProminent).disabled(url == nil)
-            }.padding(.horizontal)
-            NavigationLink("Edit This Job’s Documents") { JobPresetSettingsView(job: job) }.font(.caption).padding(.bottom, 6)
+            Button { showingShare = true } label: { Text("Export").frame(maxWidth: .infinity) }
+                .buttonStyle(.borderedProminent).disabled(url == nil)
+                .padding(.horizontal).padding(.bottom, 6)
         }
         .navigationTitle("Preview").navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingShare) { if let url { NavigationStack { ShareOptionsView(url: url, packURL: packURL, data: data, title: job.number) } } }
         .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
-        .sheet(isPresented: $showingBusiness) { if let profile { NavigationStack { BusinessProfileView(profile: profile) } } }
+        .sheet(item: $editingJobPreset) { preset in
+            NavigationStack {
+                PresetEditorView(preset: preset, editName: false) { job.applyPreset($0, includeJobDefaults: false) }
+            }
+        }
+        .sheet(item: $creatingPreset) { preset in
+            NavigationStack {
+                PresetEditorView(preset: preset) { saved in
+                    store.save(saved)
+                    job.applyPreset(saved, includeJobDefaults: false)
+                }
+            }
+        }
+        .alert("Use this preset?", isPresented: Binding(get: { pendingPreset != nil }, set: { if !$0 { pendingPreset = nil } })) {
+            Button("Use Preset") { if let preset = pendingPreset { job.applyPreset(preset, includeJobDefaults: false) }; pendingPreset = nil }
+            Button("Cancel", role: .cancel) { pendingPreset = nil }
+        } message: {
+            Text("This updates this job’s business and document settings. Client details and work notes stay as they are.")
+        }
         .onAppear { render() }
         .onChange(of: kind) { _, _ in render() }
         .task { await entitlements.refresh(); render() }
         .onChange(of: entitlements.isPro) { _, _ in render() }
         .onChange(of: showPhotosInWorkReport) { _, _ in render() }
         .onChange(of: job.documentPresetData) { _, _ in render() }
-        .onChange(of: showingBusiness) { _, showing in if !showing { render() } }
+    }
+    private var documentSetup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "slider.horizontal.3").foregroundStyle(Brand.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Document setup").font(.subheadline.bold()).foregroundStyle(Brand.navy)
+                    Text(hasBusinessName ? (job.documentPreset?.name ?? "Current settings") : "Add your business details")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 10) {
+                Button {
+                    editingJobPreset = presetDraft()
+                } label: { Text(hasBusinessName ? "Customise" : "Add details").frame(maxWidth: .infinity) }
+                .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
+                Menu {
+                    ForEach(store.presets) { preset in
+                        Button {
+                            pendingPreset = preset
+                        } label: {
+                            if job.documentPreset?.id == preset.id { Label(preset.name, systemImage: "checkmark") }
+                            else { Text(preset.name) }
+                        }
+                    }
+                    if !store.presets.isEmpty { Divider() }
+                    Button { var draft = presetDraft(); draft.name = ""; creatingPreset = draft } label: {
+                        Label("Create New Preset", systemImage: "plus")
+                    }
+                } label: {
+                    Label("Presets", systemImage: "square.on.square")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered).frame(maxWidth: .infinity)
+            }
+            Text("Save a preset to reuse your document details on future jobs.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(12).background(Brand.pale, in: RoundedRectangle(cornerRadius: 13))
+    }
+    private func presetDraft() -> SavedPreset {
+        var draft = job.documentPreset ?? SavedPreset.custom(profile: profile)
+        if job.documentPreset == nil {
+            if !job.businessName.isEmpty { draft.business.businessName = job.businessName }
+            draft.business.currencyCode = job.currencyCode
+            draft.business.taxRate = job.taxRate
+        }
+        draft.id = UUID()
+        draft.name = "Custom"
+        draft.technician = ""
+        draft.category = ""
+        return draft
     }
     private func render() {
         guard kind != .pack || entitlements.isPro else { data = Data(); url = nil; return }

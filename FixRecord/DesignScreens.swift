@@ -193,63 +193,10 @@ struct JobEditView: View {
                     JobFormDivider()
                     JobTextField("Phone", placeholder: "Client phone", text: $job.clientPhone)
                 }
-                NavigationLink { JobPresetSettingsView(job: job) } label: {
-                    HStack { Text("Document preset"); Spacer(); Text(job.documentPreset?.name ?? "Current settings").foregroundStyle(.secondary); Image(systemName: "chevron.right") }
-                }.padding(16).background(.white, in: RoundedRectangle(cornerRadius: 13))
             }.padding(18)
         }.background(Brand.background).navigationTitle("Edit Job").toolbar { Button("Done") { dismiss() } }
             .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: job.category) { job.category = $0 } }
             .onDisappear { job.technicianConfirmed = false }
-    }
-}
-
-struct JobPresetSettingsView: View {
-    @Bindable var job: Job
-    @Query private var profiles: [BusinessProfile]
-    @State private var store = PresetStore.shared
-    @State private var pendingPreset: SavedPreset?
-    @State private var editingPreset: SavedPreset?
-
-    private var profile: BusinessProfile? { profiles.first }
-
-    var body: some View {
-        List {
-            Section {
-                LabeledContent("This job", value: job.documentPreset?.name ?? "Current settings")
-            } footer: { Text("Applying a preset saves a copy on this job. Later changes to the preset will not alter this job.") }
-            Section("Saved presets") {
-                if store.presets.isEmpty { Text("Create presets in Settings to reuse them here.").foregroundStyle(.secondary) }
-                ForEach(store.presets) { preset in
-                    Button { pendingPreset = preset } label: {
-                        HStack { Text(preset.name); Spacer(); if job.documentPreset?.id == preset.id { Image(systemName: "checkmark").foregroundStyle(Brand.blue) } }
-                    }
-                }
-            }
-            Section {
-                Button("Customise for this job") {
-                    var value = job.documentPreset ?? SavedPreset.custom(profile: profile)
-                    if job.documentPreset == nil {
-                        if !job.businessName.isEmpty { value.business.businessName = job.businessName }
-                        value.business.currencyCode = job.currencyCode
-                        value.business.taxRate = job.taxRate
-                    }
-                    value.name = "Custom"
-                    value.id = UUID()
-                    editingPreset = value
-                }
-            } footer: { Text("Manual changes here affect only this job. Job title, client, notes and photos stay editable on their own screens.") }
-        }.navigationTitle("Job Preset")
-            .alert("Apply preset to this job?", isPresented: Binding(get: { pendingPreset != nil }, set: { if !$0 { pendingPreset = nil } })) {
-                Button("Apply") { if let preset = pendingPreset { job.applyPreset(preset, includeJobDefaults: true) }; pendingPreset = nil }
-                Button("Cancel", role: .cancel) { pendingPreset = nil }
-            } message: { Text("This replaces this job’s branding, document settings, currency, tax rate, and any technician or category set in the preset. Client details and work notes are kept.") }
-            .sheet(item: $editingPreset) { preset in
-                NavigationStack {
-                    PresetEditorView(preset: preset, editName: false) { edited in
-                        job.applyPreset(edited, includeJobDefaults: false)
-                    }
-                }
-            }
     }
 }
 
@@ -652,9 +599,11 @@ struct PresetEditorView: View {
                 TextField("Tax / VAT %", text: $preset.business.taxRate).keyboardType(.decimalPad)
                 TextField("Invoice prefix", text: $preset.business.invoicePrefix)
             }
-            Section("Job defaults") {
-                TextField("Technician (optional)", text: $preset.technician)
-                TextField("Category (optional)", text: $preset.category)
+            if editName {
+                Section("Job defaults") {
+                    TextField("Technician (optional)", text: $preset.technician)
+                    TextField("Category (optional)", text: $preset.category)
+                }
             }
             Section("Document layout") {
                 Picker("Layout", selection: $preset.options.template) {

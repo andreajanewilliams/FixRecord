@@ -466,7 +466,6 @@ struct JobDetailView: View {
                 NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Add or review before and after", icon: "photo.on.rectangle.angled") }
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }
-                NavigationLink { JobPresetSettingsView(job: job) } label: { feature("Document Preset", subtitle: job.documentPreset?.name ?? "Current settings", icon: "square.on.square") }
                 NavigationLink { ExportView(job: job) } label: { feature("Preview & Export", subtitle: "Work report, invoice or client pack", icon: "doc.richtext") }
                 if job.status == .completed { Toggle("I confirm this work record", isOn: $job.technicianConfirmed).font(.subheadline) }
             }.padding()
