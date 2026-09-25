@@ -43,6 +43,8 @@ struct RootView: View {
     @State private var newJob = false
     @State private var selectedJob: Job?
     @State private var pendingJob: Job?
+    @State private var pendingExampleJob: Job?
+    @State private var exampleError: String?
     @State private var selection = 0
     var profile: BusinessProfile? { profiles.first }
     var body: some View {
@@ -57,11 +59,32 @@ struct RootView: View {
         .fullScreenCover(isPresented: $newJob, onDismiss: {
             if let pendingJob { selectedJob = pendingJob; self.pendingJob = nil }
         }) { NavigationStack { CreateJobView(profile: profile) { job in pendingJob = job; newJob = false } } }
-        .fullScreenCover(isPresented: Binding(get: { !didCompleteOnboarding && !ProcessInfo.processInfo.arguments.contains("-skip-onboarding") }, set: { if !$0 { didCompleteOnboarding = true } })) {
-            OnboardingView {
-                didCompleteOnboarding = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { newJob = true }
+        .fullScreenCover(isPresented: Binding(get: { !didCompleteOnboarding && !ProcessInfo.processInfo.arguments.contains("-skip-onboarding") }, set: { if !$0 { didCompleteOnboarding = true } }), onDismiss: {
+            if let pendingExampleJob { selectedJob = pendingExampleJob; self.pendingExampleJob = nil }
+        }) {
+            OnboardingView { choice in
+                switch choice {
+                case .exampleJob:
+                    let example = jobs.first(where: { $0.isSample }) ?? SampleJob.make()
+                    if !jobs.contains(where: { $0.isSample }) {
+                        context.insert(example)
+                        do { try context.save() }
+                        catch {
+                            context.rollback()
+                            exampleError = "The example job could not be saved. Please try again."
+                            return
+                        }
+                    }
+                    pendingExampleJob = example
+                    didCompleteOnboarding = true
+                case .createJob:
+                    didCompleteOnboarding = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { newJob = true }
+                }
             }
+            .alert("Could not add example", isPresented: Binding(get: { exampleError != nil }, set: { if !$0 { exampleError = nil } })) {
+                Button("OK") { exampleError = nil }
+            } message: { Text(exampleError ?? "") }
         }
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-load-sample") && !jobs.contains(where: { $0.isSample }) {
@@ -94,8 +117,8 @@ struct HomeView: View {
                 }
                 Picker("Jobs", selection: $filter) { ForEach(JobFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
                 if visibleJobs.isEmpty {
-                    ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : "No jobs here", systemImage: "doc.text.image", description: Text(jobs.isEmpty ? "Create a job or explore a sample." : "Try another filter."))
-                    if jobs.isEmpty { Button("Load Sample Job") { context.insert(SampleJob.make()) }.buttonStyle(.bordered) }
+                    ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : "No jobs here", systemImage: "doc.text.image", description: Text(jobs.isEmpty ? "Create a job or explore an example." : "Try another filter."))
+                    if jobs.isEmpty { Button("Add Example Job") { context.insert(SampleJob.make()) }.buttonStyle(.bordered) }
                 } else {
                     LazyVStack(spacing: 8) { ForEach(visibleJobs) { job in
                         Button { selectedJob = job } label: { JobRow(job: job) }.buttonStyle(.plain)
@@ -376,7 +399,7 @@ struct JobDetailView: View {
                     Text(job.clientName).font(.subheadline)
                     if !job.siteAddress.isEmpty { Label(job.siteAddress, systemImage: "mappin").font(.caption).foregroundStyle(.secondary) }
                     Text(job.number).font(.caption).foregroundStyle(.secondary)
-                    if job.isSample { Label("SAMPLE DATA", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
+                    if job.isSample { Label("EXAMPLE JOB", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
                 }
                 Picker("Status", selection: Binding(get: { job.status }, set: { job.status = $0 })) { ForEach(JobStatus.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
                 NavigationLink { PhotoCaptureView(job: job, kind: .before) } label: { feature("Capture Before", subtitle: "Optional photo of the starting condition", icon: "camera") }

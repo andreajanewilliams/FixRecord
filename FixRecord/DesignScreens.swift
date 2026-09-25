@@ -4,8 +4,13 @@ import PhotosUI
 import PDFKit
 import Observation
 
+enum OnboardingChoice {
+    case exampleJob
+    case createJob
+}
+
 struct OnboardingView: View {
-    let finish: () -> Void
+    let finish: (OnboardingChoice) -> Void
     @State private var page = 0
     @State private var reportPreview: UIImage?
     @State private var invoicePreview: UIImage?
@@ -14,13 +19,21 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             if page == 0 { welcome }
             else {
-                HStack { Spacer(); Button("Skip") { finish() }.font(.subheadline).padding() }
+                HStack { Spacer(); Button("Skip") { finish(.createJob) }.font(.subheadline).padding() }
                 Spacer(minLength: 16)
-                if page == 1 { capture } else { documents }
+                if page == 1 { capture }
+                else if page == 2 { documents }
+                else { exampleJob }
                 Spacer(minLength: 20)
-                Button(page == 1 ? "Next" : "Create First Job") { if page == 1 { page = 2 } else { finish() } }
+                Button(page == 3 ? "Add Example Job" : "Next") {
+                    if page == 3 { finish(.exampleJob) } else { page += 1 }
+                }
                     .font(.headline).frame(maxWidth: .infinity).padding(15).foregroundStyle(.white)
                     .background(Brand.blue, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 24)
+                if page == 3 {
+                    Button("Create My Own Job") { finish(.createJob) }
+                        .font(.headline).padding(.top, 14)
+                }
                 dots.padding(.top, 16).padding(.bottom, 24)
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(page == 0 ? Brand.navy : .white)
@@ -98,6 +111,39 @@ struct OnboardingView: View {
         }.onAppear(perform: prepareDocumentPreviews)
     }
 
+    private var exampleJob: some View {
+        VStack(spacing: 18) {
+            Text("Explore an example job.")
+                .font(.system(size: 30, weight: .bold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Brand.navy)
+            Text("See how photos, work details and materials become a finished report and invoice.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 32)
+            VStack(alignment: .leading, spacing: 15) {
+                HStack {
+                    Label("EXAMPLE JOB", systemImage: "sparkles")
+                        .font(.caption.bold()).foregroundStyle(Brand.blue)
+                    Spacer()
+                    Text("Completed").font(.caption.bold()).foregroundStyle(Brand.teal)
+                }
+                Text("Kitchen Sink Repair").font(.title2.bold()).foregroundStyle(Brand.navy)
+                HStack(spacing: 12) {
+                    photo("sample-before-repair-v2", "Before")
+                    photo("sample-after-repair-v2", "After")
+                }.frame(maxWidth: .infinity)
+                Label("Work report and invoice ready to preview", systemImage: "doc.text")
+                    .font(.subheadline).foregroundStyle(Brand.navy)
+            }
+            .padding(20)
+            .background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
+            .padding(.horizontal, 24)
+            Text("You can delete the example at any time.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private func documentImage(_ image: UIImage) -> some View {
         Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
             .frame(width: 192, height: 272)
@@ -120,7 +166,7 @@ struct OnboardingView: View {
     }
 
     private var dots: some View {
-        HStack(spacing: 7) { ForEach(0..<3) { index in Circle().fill(index == page ? Brand.blue : Color.gray.opacity(0.35)).frame(width: 6, height: 6) } }
+        HStack(spacing: 7) { ForEach(0..<4) { index in Circle().fill(index == page ? Brand.blue : Color.gray.opacity(0.35)).frame(width: 6, height: 6) } }
     }
 }
 
@@ -395,7 +441,7 @@ struct DataManagementView: View {
     var body: some View {
         List {
             Section("On this device") { Text("Jobs and photos are stored locally. Export PDFs before removing the app.") }
-            Section("Demo") { Button("Load Sample Job") { if !jobs.contains(where: { $0.isSample }) { context.insert(SampleJob.make()) } }; Text("The sample is clearly labelled and can be removed from Jobs.").font(.caption).foregroundStyle(.secondary) }
+            Section("Example") { Button("Add Example Job") { if !jobs.contains(where: { $0.isSample }) { context.insert(SampleJob.make()) } }; Text("The example is clearly labelled and can be removed from Jobs.").font(.caption).foregroundStyle(.secondary) }
         }.navigationTitle("Data Management")
     }
 }

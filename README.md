@@ -8,8 +8,8 @@
 
 1. Open `FixRecord.xcodeproj` in Xcode 26.3 or later. The deployment target is iOS 17.
 2. Let Xcode resolve the RevenueCat Swift package. The OpenCV Mobile 4.13.0 XCFramework is included in `ThirdParty/` with device and Apple Silicon/Intel simulator slices.
-3. Select an iPhone simulator and run. There is no sign-in. The three-screen onboarding leads straight to a new job.
-4. To explore without taking photos, open **Settings → Data Management → Load Sample Job**. The Kitchen Sink Repair record is labelled **SAMPLE DATA**.
+3. Select an iPhone simulator and run. There is no sign-in. Onboarding asks whether to add an example job or create your own.
+4. To add the example later, open **Settings → Data Management → Add Example Job**. The Kitchen Sink Repair record is labelled **EXAMPLE JOB** and can be deleted from Jobs.
 5. Open the before and after steps to see the MatchShot ghost overlay. On a simulator, choose images from Photos; the camera needs a device.
 6. Dictate or type **Reported Issue** and **Work Completed**. On-device dictation needs microphone and speech-recognition permission and a supported language. Typing remains available.
 7. Scan a receipt with the document camera or import one from Photos, review its OCR suggestions, then add confirmed materials. Open **Materials & Pricing** for Decimal totals and **Preview & Export** for PDFs.
