@@ -14,8 +14,8 @@ enum DefaultCategoryMode: String, Codable, CaseIterable {
 struct JobDefaultsState: Codable, Equatable {
     var hasRecordedJob = false
     var defaultTechnician = ""
-    var categoryMode: DefaultCategoryMode = .lastUsed
-    var selectedCategory = ""
+    var categoryMode: DefaultCategoryMode = .selected
+    var selectedCategory = "Maintenance"
     var lastUsedTechnician = ""
     var lastUsedCategory = ""
     var recentTechnicians: [String] = []
@@ -32,7 +32,13 @@ struct JobDefaultsState: Codable, Equatable {
 
     init(storage: UserDefaults = .standard) {
         self.storage = storage
-        state = (storage.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(JobDefaultsState.self, from: $0) }) ?? JobDefaultsState()
+        let saved = storage.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(JobDefaultsState.self, from: $0) }
+        if saved == JobDefaultsState(categoryMode: .lastUsed, selectedCategory: "") {
+            state = JobDefaultsState()
+            if let data = try? JSONEncoder().encode(state) { storage.set(data, forKey: storageKey) }
+        } else {
+            state = saved ?? JobDefaultsState()
+        }
     }
 
     func technician(for profile: BusinessProfile?) -> String {

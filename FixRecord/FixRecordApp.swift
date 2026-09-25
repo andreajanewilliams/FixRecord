@@ -344,7 +344,7 @@ struct CategorySelectionSheet: View {
             }.background(Brand.background).navigationTitle("Select Category").navigationBarTitleDisplayMode(.inline)
                 .safeAreaInset(edge: .bottom) { PrimaryButton(title: "Done", icon: "checkmark") { finish() }.padding(18).background(Brand.background) }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-        }.presentationDetents([.fraction(0.8), .large])
+        }.presentationDetents([.large])
             .onAppear { selected = value.isEmpty ? .none : .category(value) }
             .alert("Choose another name", isPresented: Binding(get: { !error.isEmpty }, set: { if !$0 { error = "" } })) { Button("OK", role: .cancel) { error = "" } } message: { Text(error) }
     }

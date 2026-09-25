@@ -12,14 +12,15 @@ final class FixRecordTests: XCTestCase {
         return (JobDefaultsService(storage: storage), storage)
     }
 
-    func testFirstJobHasNoCategoryOrTechnicianDefault() {
+    func testFirstJobDefaultsToMaintenanceWithoutTechnician() {
         let (defaults, _) = isolatedDefaults()
-        XCTAssertEqual(defaults.category(), "")
+        XCTAssertEqual(defaults.category(), "Maintenance")
         XCTAssertEqual(defaults.technician(for: nil), "")
     }
 
     func testLastUsedCategoryAndTechnicianPersistAcrossLaunches() {
         let (defaults, storage) = isolatedDefaults()
+        defaults.state.categoryMode = .lastUsed
         defaults.remember(technician: "Alex Turner", category: "Plumbing")
         let reopened = JobDefaultsService(storage: storage)
         XCTAssertEqual(reopened.category(), "Plumbing")
@@ -27,26 +28,28 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(reopened.state.recentTechnicians, ["Alex Turner"])
     }
 
-    func testExistingJobsSeedDefaultsOnceWithoutUsingSampleData() {
+    func testExistingJobsSeedTechnicianWithoutReplacingMaintenanceDefault() {
         let (defaults, _) = isolatedDefaults()
         let sample = SampleJob.make()
         defaults.bootstrap(from: [sample])
-        XCTAssertEqual(defaults.category(), "")
+        XCTAssertEqual(defaults.category(), "Maintenance")
         let existing = SampleJob.make()
         existing.isSample = false
         existing.category = "Appliance Repair"
         existing.technician = "Alex Turner"
         defaults.bootstrap(from: [existing, sample])
-        XCTAssertEqual(defaults.category(), "Appliance Repair")
+        XCTAssertEqual(defaults.category(), "Maintenance")
+        XCTAssertEqual(defaults.state.lastUsedCategory, "Appliance Repair")
         XCTAssertEqual(defaults.technician(for: nil), "Alex Turner")
         XCTAssertEqual(defaults.state.customCategories, ["Appliance Repair"])
         existing.category = "Plumbing"
         defaults.bootstrap(from: [existing])
-        XCTAssertEqual(defaults.category(), "Appliance Repair")
+        XCTAssertEqual(defaults.category(), "Maintenance")
     }
 
     func testLegacyOtherCategoryRemainsSelectableAndSeedsLastUsed() {
         let (defaults, _) = isolatedDefaults()
+        defaults.state.categoryMode = .lastUsed
         let existing = SampleJob.make()
         existing.isSample = false
         existing.category = "Other"
@@ -54,6 +57,19 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(defaults.category(), "Other")
         XCTAssertTrue(defaults.state.customCategories.isEmpty)
         XCTAssertEqual(existing.category, "Other")
+    }
+
+    func testUntouchedLegacyDefaultsBecomeMaintenanceButExplicitNoneIsPreserved() throws {
+        let (_, storage) = isolatedDefaults()
+        let legacy = JobDefaultsState(categoryMode: .lastUsed, selectedCategory: "")
+        storage.set(try JSONEncoder().encode(legacy), forKey: "fixrecord.jobDefaults.v1")
+        let migrated = JobDefaultsService(storage: storage)
+        XCTAssertEqual(migrated.category(), "Maintenance")
+        XCTAssertEqual(migrated.state.categoryMode, .selected)
+        XCTAssertEqual(JobDefaultsService(storage: storage).category(), "Maintenance")
+
+        migrated.state.categoryMode = .none
+        XCTAssertEqual(JobDefaultsService(storage: storage).category(), "")
     }
 
     func testExplicitDefaultsOutrankBusinessProfileAndOneOffJobValues() {
