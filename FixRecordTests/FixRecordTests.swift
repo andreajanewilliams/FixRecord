@@ -368,7 +368,11 @@ final class FixRecordTests: XCTestCase {
         XCTAssertTrue(AIService.hasEvidence(job: job))
         job.roughNote = ""
         job.photos = [JobPhoto(kind: .after, filename: "after.jpg")]
+        XCTAssertFalse(AIService.hasEvidence(job: job))
+        job.photos = [JobPhoto(kind: .after, filename: "sample-after")]
         XCTAssertTrue(AIService.hasEvidence(job: job))
+        let emojiTitle = String(repeating: "😀", count: 76)
+        XCTAssertEqual(AIService.clipped(emojiTitle, maxUTF16Units: 150), String(repeating: "😀", count: 75))
         XCTAssertNotNil(AIService.endpointURL(from: "https://example.com/api/generate-report"))
         XCTAssertNil(AIService.endpointURL(from: "http://example.com/api/generate-report"))
         XCTAssertNil(AIService.endpointURL(from: "$(AI_ENDPOINT)"))

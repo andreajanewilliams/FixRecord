@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash } from 'node:crypto';
+import sharp from 'sharp';
 
 type Input = { installId: string; jobId: string; revenueCatAppUserId: string; jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
 const required = ['reportedIssue', 'workCompleted', 'completionNotes', 'professionalSummary'] as const;
@@ -12,6 +13,15 @@ function validImage(value: unknown): value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 1_200_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
   const bytes = Buffer.from(value, 'base64');
   return bytes.length > 0 && bytes.length <= maxImageBytes && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff && bytes.toString('base64') === value;
+}
+
+async function normaliseImage(value: string | undefined): Promise<string | undefined> {
+  if (!value) return undefined;
+  const image = await sharp(Buffer.from(value, 'base64'), { failOn: 'warning', limitInputPixels: 4_000_000 })
+    .rotate().resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 75 }).toBuffer();
+  if (image.length > maxImageBytes) throw new Error('Image is too large');
+  return image.toString('base64');
 }
 
 function valid(body: unknown): body is Input {
@@ -101,6 +111,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!valid(req.body)) return res.status(400).json({ error: 'Invalid job facts' });
   if (!process.env.OPENAI_API_KEY?.trim()) return res.status(503).json({ error: 'AI is not configured' });
   const input = req.body;
+  let beforeImage: string | undefined, afterImage: string | undefined;
+  try {
+    beforeImage = await normaliseImage(input.beforeImage);
+    afterImage = await normaliseImage(input.afterImage);
+  } catch { return res.status(400).json({ error: 'Invalid job photo' }); }
   const ip = String((process.env.VERCEL ? req.headers['x-vercel-forwarded-for'] : req.headers['x-forwarded-for']) ?? req.socket.remoteAddress ?? 'unknown').split(',')[0].trim().slice(0, 64);
   const ipKey = createHash('sha256').update(ip).digest('hex');
   const key = `${input.installId}:${ipKey}`;
@@ -112,8 +127,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const content: Array<Record<string, string>> = [
       { type: 'input_text', text: JSON.stringify({ jobTitle: input.jobTitle, issueDescription: input.issueDescription, roughNotes: input.roughNotes, materials: input.materials ?? [], locale: input.locale ?? 'en' }) }
     ];
-    if (input.beforeImage) content.push({ type: 'input_text', text: 'Before photo (starting condition)' }, { type: 'input_image', image_url: `data:image/jpeg;base64,${input.beforeImage}`, detail: 'high' });
-    if (input.afterImage) content.push({ type: 'input_text', text: 'After photo (finished condition)' }, { type: 'input_image', image_url: `data:image/jpeg;base64,${input.afterImage}`, detail: 'high' });
+    if (beforeImage) content.push({ type: 'input_text', text: 'Before photo (starting condition)' }, { type: 'input_image', image_url: `data:image/jpeg;base64,${beforeImage}`, detail: 'high' });
+    if (afterImage) content.push({ type: 'input_text', text: 'After photo (finished condition)' }, { type: 'input_image', image_url: `data:image/jpeg;base64,${afterImage}`, detail: 'high' });
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST', signal: controller.signal,
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },

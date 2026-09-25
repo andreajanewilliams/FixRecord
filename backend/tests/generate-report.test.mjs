@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
+import sharp from 'sharp';
 import handler from '../.test-dist/api/generate-report.js';
 
 const originalFetch = globalThis.fetch;
 const originalEnvironment = { ...process.env };
-const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+const jpeg = (await sharp({ create: { width: 4, height: 4, channels: 3, background: '#ffffff' } }).jpeg().toBuffer()).toString('base64');
 
 before(() => {
   delete process.env.VERCEL;
@@ -61,14 +62,18 @@ test('Luna request includes labelled photos and keeps job identifiers out of mod
   assert.equal(upstream.store, false);
   const content = upstream.input[0].content;
   assert.deepEqual(content.map(x => x.type), ['input_text', 'input_text', 'input_image', 'input_text', 'input_image']);
-  assert.equal(content[2].image_url, `data:image/jpeg;base64,${jpeg}`);
-  assert.equal(content[4].image_url, `data:image/jpeg;base64,${jpeg}`);
+  for (const part of [content[2], content[4]]) {
+    assert.match(part.image_url, /^data:image\/jpeg;base64,/);
+    const bytes = Buffer.from(part.image_url.split(',')[1], 'base64');
+    assert.equal((await sharp(bytes).metadata()).format, 'jpeg');
+  }
   assert.ok(!JSON.stringify(upstream).includes(req.body.installId));
   assert.ok(!JSON.stringify(upstream).includes(req.body.jobId));
 });
 
-test('rejects requests with no work evidence or invalid image data', async () => {
-  for (const overrides of [{}, { beforeImage: Buffer.from('not a jpeg').toString('base64') }]) {
+test('rejects requests with no work evidence or invalid image data before spending quota', async () => {
+  globalThis.fetch = async () => { throw new Error('invalid inputs must not reach the model'); };
+  for (const overrides of [{}, { beforeImage: Buffer.from('not a jpeg').toString('base64') }, { beforeImage: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') }]) {
     const req = request(overrides);
     req.body.revenueCatAppUserId = req.body.installId;
     const res = response();

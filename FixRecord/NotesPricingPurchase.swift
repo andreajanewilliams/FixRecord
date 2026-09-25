@@ -31,9 +31,28 @@ enum AIService {
         endpointURL(from: (Bundle.main.object(forInfoDictionaryKey: "AI_ENDPOINT") as? String) ?? "")
     }
     static var isConfigured: Bool { endpointURL != nil }
+    static func clipped(_ value: String, maxUTF16Units: Int) -> String {
+        var result = ""
+        var remaining = maxUTF16Units
+        for scalar in value.unicodeScalars {
+            let units = scalar.value > 0xFFFF ? 2 : 1
+            guard units <= remaining else { break }
+            result.unicodeScalars.append(scalar)
+            remaining -= units
+        }
+        return result
+    }
+    private static func selectedPhotos(for job: Job) -> (before: JobPhoto?, after: JobPhoto?) {
+        let photos = job.photos
+        let after = photos.last { $0.kind == .after && PhotoStore.image($0.filename) != nil }
+        let before = photos.first { $0.id == after?.pairedBeforeID && PhotoStore.image($0.filename) != nil }
+            ?? photos.last { $0.kind == .before && PhotoStore.image($0.filename) != nil }
+        return (before, after)
+    }
     static func hasEvidence(job: Job) -> Bool {
-        !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || job.photos.contains { $0.kind == .before || $0.kind == .after }
+        if !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        let photos = selectedPhotos(for: job)
+        return photos.before != nil || photos.after != nil
     }
     private static func encodedPhoto(_ photo: JobPhoto?) -> String? {
         guard let photo, let image = PhotoStore.image(photo.filename), image.size.width > 0, image.size.height > 0 else { return nil }
@@ -54,11 +73,9 @@ enum AIService {
     }
     static func improve(job: Job) async throws -> AIResponse {
         guard let url = endpointURL else { throw Failure.notConfigured }
-        let after = job.photos.last { $0.kind == .after }
-        let before = job.photos.first { $0.id == after?.pairedBeforeID }
-            ?? job.photos.last { $0.kind == .before }
-        let beforeImage = encodedPhoto(before)
-        let afterImage = encodedPhoto(after)
+        let photos = selectedPhotos(for: job)
+        let beforeImage = encodedPhoto(photos.before)
+        let afterImage = encodedPhoto(photos.after)
         guard !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || beforeImage != nil || afterImage != nil else { throw Failure.insufficientDetail }
         var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 25
@@ -67,7 +84,7 @@ enum AIService {
             if let id = UserDefaults.standard.string(forKey: "installID") { return id }
             let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "installID"); return id
         }()
-        var body: [String: Any] = ["installId": installID, "jobId": job.id.uuidString, "revenueCatAppUserId": installID, "jobTitle": String(job.title.prefix(150)), "issueDescription": String(job.issue.prefix(1000)), "roughNotes": String(job.roughNote.prefix(3000)), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { String($0.name.prefix(80)) }, "locale": Locale.current.identifier]
+        var body: [String: Any] = ["installId": installID, "jobId": job.id.uuidString, "revenueCatAppUserId": installID, "jobTitle": clipped(job.title, maxUTF16Units: 150), "issueDescription": clipped(job.issue, maxUTF16Units: 1000), "roughNotes": clipped(job.roughNote, maxUTF16Units: 3000), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { clipped($0.name, maxUTF16Units: 80) }, "locale": clipped(Locale.current.identifier, maxUTF16Units: 40)]
         if let beforeImage { body["beforeImage"] = beforeImage }
         if let afterImage { body["afterImage"] = afterImage }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
