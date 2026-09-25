@@ -5,6 +5,27 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testDictationKeepsEarlierPhraseWhenRecognitionStartsLaterInAudio() {
+        var transcript = SpeechTranscriptAccumulator()
+        XCTAssertEqual(transcript.update("The pipe was leaking", firstSegmentAt: 0, lastSegmentEnd: 2.1, receivedAt: 1), "The pipe was leaking")
+        XCTAssertEqual(transcript.update("I replaced the washer", firstSegmentAt: 3.0, lastSegmentEnd: 4.5, receivedAt: 3), "The pipe was leaking I replaced the washer")
+        XCTAssertEqual(transcript.update("I replaced the washer and tested it", firstSegmentAt: 3.0, lastSegmentEnd: 5.5, receivedAt: 4), "The pipe was leaking I replaced the washer and tested it")
+    }
+
+    func testDictationKeepsEarlierPhraseAfterPauseWhenAudioTimesReset() {
+        var transcript = SpeechTranscriptAccumulator()
+        XCTAssertEqual(transcript.update("I fixed the pipe", firstSegmentAt: 0, lastSegmentEnd: 2, receivedAt: 1), "I fixed the pipe")
+        XCTAssertEqual(transcript.update("I", firstSegmentAt: 0, lastSegmentEnd: 0.2, receivedAt: 3), "I fixed the pipe I")
+        XCTAssertEqual(transcript.update("I replaced the washer", firstSegmentAt: 0, lastSegmentEnd: 1, receivedAt: 3.4), "I fixed the pipe I replaced the washer")
+    }
+
+    func testDictationRevisesCurrentPhraseWithoutRepeatingIt() {
+        var transcript = SpeechTranscriptAccumulator()
+        XCTAssertEqual(transcript.update("I fix the pipe", firstSegmentAt: 0, lastSegmentEnd: 1, receivedAt: 1), "I fix the pipe")
+        XCTAssertEqual(transcript.update("I fixed the pipe", firstSegmentAt: 0, lastSegmentEnd: 1.2, receivedAt: 1.2), "I fixed the pipe")
+        XCTAssertEqual(transcript.update("I fixed the pipe yesterday", firstSegmentAt: 0, lastSegmentEnd: 2, receivedAt: 2), "I fixed the pipe yesterday")
+    }
+
     private func isolatedDefaults() -> (JobDefaultsService, UserDefaults) {
         let suite = "FixRecordTests.\(UUID().uuidString)"
         let storage = UserDefaults(suiteName: suite)!
