@@ -5,6 +5,30 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testCurrencyDefaultsAndCustomCodes() {
+        XCTAssertEqual(BusinessProfile().currencyCode, "USD")
+        XCTAssertEqual(SavedPreset.custom(profile: nil).business.currencyCode, "USD")
+        XCTAssertTrue(CurrencyCatalog.matches("USD", query: " usd "))
+        XCTAssertEqual(CurrencyCatalog.customCode(" btc "), "BTC")
+        XCTAssertNil(CurrencyCatalog.customCode("US"))
+        XCTAssertNil(CurrencyCatalog.customCode("$US"))
+    }
+
+    func testChangingCurrencyKeepsJobDocumentSettingsInSync() {
+        let job = SampleJob.make()
+        var saved = SavedPreset.custom(profile: nil)
+        saved.name = "Standard"
+        job.applyPreset(saved, includeJobDefaults: false)
+
+        job.setCurrency("EUR")
+
+        XCTAssertEqual(job.currencyCode, "EUR")
+        XCTAssertEqual(job.documentPreset?.business.currencyCode, "EUR")
+        XCTAssertEqual(job.documentPreset?.name, "Custom")
+        XCTAssertNotEqual(job.documentPreset?.id, saved.id)
+        XCTAssertEqual(saved.business.currencyCode, "USD")
+    }
+
     func testHomeSearchAndStatusFilterWorkTogether() {
         let draft = Job(number: "FR-2042", title: "Kitchen Sink Repair", clientName: "Sarah Mitchell", siteAddress: "12 Oak Avenue", category: "Plumbing", issue: "Leak", technician: "Alex", businessName: "", currencyCode: "ZAR", taxRate: "0")
         let completed = Job(number: "FR-2043", title: "Bathroom Tap", clientName: "Mia", siteAddress: "4 Pine Road", category: "Maintenance", issue: "", technician: "", businessName: "", currencyCode: "ZAR", taxRate: "0")

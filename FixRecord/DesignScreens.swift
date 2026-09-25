@@ -409,7 +409,7 @@ struct BusinessSnapshot: Codable, Equatable {
     var address = ""
     var taxNumber = ""
     var paymentInstructions = ""
-    var currencyCode = "ZAR"
+    var currencyCode = "USD"
     var taxRate = "0"
     var invoicePrefix = "FR"
     var logoFilename = ""
@@ -431,6 +431,102 @@ struct BusinessSnapshot: Codable, Equatable {
         value.currencyCode = currencyCode; value.taxRate = taxRate
         value.invoicePrefix = invoicePrefix; value.logoFilename = logoFilename
         return value
+    }
+}
+
+enum CurrencyCatalog {
+    static let common = ["USD", "EUR", "GBP", "ZAR", "CAD", "AUD", "INR", "JPY"]
+    static let codes = Locale.commonISOCurrencyCodes.sorted()
+
+    static func name(for code: String) -> String {
+        Locale.current.localizedString(forCurrencyCode: code) ?? "Custom currency"
+    }
+
+    static func matches(_ code: String, query: String) -> Bool {
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return search.isEmpty || code.localizedStandardContains(search) || name(for: code).localizedStandardContains(search)
+    }
+
+    static func customCode(_ input: String) -> String? {
+        let code = input.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return code.range(of: "^[A-Z]{3}$", options: .regularExpression) == nil ? nil : code
+    }
+}
+
+struct CurrencyPickerRow: View {
+    @Binding var currencyCode: String
+    @State private var showingCurrencies = false
+
+    var body: some View {
+        Button { showingCurrencies = true } label: {
+            HStack {
+                Text("Currency").foregroundStyle(.primary)
+                Spacer()
+                Text(currencyCode.isEmpty ? "USD" : currencyCode.uppercased()).foregroundStyle(Brand.blue)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityLabel("Currency, \(currencyCode). Choose currency")
+        .sheet(isPresented: $showingCurrencies) {
+            NavigationStack { CurrencySelectionView(currencyCode: $currencyCode) }
+        }
+    }
+}
+
+struct CurrencySelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var currencyCode: String
+    @State private var search = ""
+    @State private var manualCode = ""
+
+    private var common: [String] { CurrencyCatalog.common.filter { CurrencyCatalog.matches($0, query: search) } }
+    private var other: [String] { CurrencyCatalog.codes.filter { !CurrencyCatalog.common.contains($0) && CurrencyCatalog.matches($0, query: search) } }
+
+    var body: some View {
+        List {
+            Section("Custom code") {
+                HStack {
+                    TextField("e.g. USD or BTC", text: $manualCode)
+                        .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    Button("Use") {
+                        if let code = CurrencyCatalog.customCode(manualCode) { select(code) }
+                    }.disabled(CurrencyCatalog.customCode(manualCode) == nil)
+                }
+                Text("Enter a three-letter code if your currency is not listed.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !common.isEmpty {
+                Section("Common currencies") { ForEach(common, id: \.self) { currencyRow($0) } }
+            }
+            if !other.isEmpty {
+                Section("All currencies") { ForEach(other, id: \.self) { currencyRow($0) } }
+            }
+            if common.isEmpty && other.isEmpty {
+                ContentUnavailableView.search(text: search)
+            }
+        }
+        .searchable(text: $search, prompt: "Search currency or code")
+        .navigationTitle("Currency").navigationBarTitleDisplayMode(.inline)
+        .toolbar { Button("Done") { dismiss() } }
+    }
+
+    private func currencyRow(_ code: String) -> some View {
+        Button { select(code) } label: {
+            HStack {
+                Text(code).font(.subheadline.weight(.semibold)).frame(width: 48, alignment: .leading)
+                Text(CurrencyCatalog.name(for: code)).foregroundStyle(.secondary)
+                Spacer()
+                if currencyCode.caseInsensitiveCompare(code) == .orderedSame {
+                    Image(systemName: "checkmark").foregroundStyle(Brand.blue)
+                }
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+
+    private func select(_ code: String) {
+        currencyCode = code
+        dismiss()
     }
 }
 
@@ -595,7 +691,7 @@ struct PresetEditorView: View {
                 TextField("Address", text: $preset.business.address, axis: .vertical)
                 TextField("Tax / VAT number", text: $preset.business.taxNumber)
                 TextField("Payment instructions", text: $preset.business.paymentInstructions, axis: .vertical)
-                TextField("Currency code", text: $preset.business.currencyCode).textInputAutocapitalization(.characters)
+                CurrencyPickerRow(currencyCode: $preset.business.currencyCode)
                 TextField("Tax / VAT %", text: $preset.business.taxRate).keyboardType(.decimalPad)
                 TextField("Invoice prefix", text: $preset.business.invoicePrefix)
             }

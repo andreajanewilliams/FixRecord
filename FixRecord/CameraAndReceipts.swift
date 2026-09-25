@@ -200,12 +200,7 @@ struct ReceiptView: View {
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 TextField("Receipt number", text: $number)
                 if !detectedTotal.isEmpty { LabeledContent("Receipt total", value: detectedTotal) }
-                HStack {
-                    Text("Job currency")
-                    Spacer()
-                    TextField("Code", text: $job.currencyCode)
-                        .multilineTextAlignment(.trailing).textInputAutocapitalization(.characters).frame(width: 80)
-                }
+                CurrencyPickerRow(currencyCode: Binding(get: { job.currencyCode }, set: { job.setCurrency($0) }))
                 Text("Prices are copied from the receipt without currency conversion.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Items found") {

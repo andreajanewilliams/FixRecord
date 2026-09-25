@@ -213,6 +213,16 @@ struct ReceiptRecord: Codable, Identifiable {
             if !preset.category.isEmpty { category = preset.category }
         }
     }
+    func setCurrency(_ code: String) {
+        guard currencyCode != code else { return }
+        currencyCode = code
+        if var preset = documentPreset {
+            preset.id = UUID()
+            preset.name = "Custom"
+            preset.business.currencyCode = code
+            documentPreset = preset
+        }
+    }
     var summary: String { professionalNote.isEmpty ? roughNote : professionalNote }
 }
 
@@ -231,7 +241,7 @@ struct ReceiptRecord: Codable, Identifiable {
     var logoFilename: String
     init() {
         id = UUID(); businessName = ""; ownerName = ""; email = ""; phone = ""; address = ""
-        taxNumber = ""; paymentInstructions = ""; currencyCode = Locale.current.currency?.identifier ?? "ZAR"
+        taxNumber = ""; paymentInstructions = ""; currencyCode = "USD"
         taxRate = "0"; invoicePrefix = "FR"; logoFilename = ""
     }
 }

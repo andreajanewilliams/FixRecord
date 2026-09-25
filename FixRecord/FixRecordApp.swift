@@ -204,6 +204,7 @@ struct CreateJobView: View {
     @State private var issue = ""
     @State private var technician = ""
     @State private var category = ""
+    @State private var currencyCode = "USD"
     @State private var date = Date()
     @State private var showingCategory = false
     @State private var createdJob: Job?
@@ -221,12 +222,14 @@ struct CreateJobView: View {
                                 chosenPreset = nil
                                 technician = defaults.technician(for: profile)
                                 category = defaults.category()
+                                currencyCode = profile?.currencyCode ?? "USD"
                             }
                             ForEach(presets.presets) { preset in
                                 Button(preset.name) {
                                     chosenPreset = preset
                                     technician = preset.technician.isEmpty ? defaults.technician(for: profile) : preset.technician
                                     category = preset.category.isEmpty ? defaults.category() : preset.category
+                                    currencyCode = preset.business.currencyCode
                                 }
                             }
                         } label: {
@@ -248,6 +251,8 @@ struct CreateJobView: View {
                     JobTextField("Property / Site (optional)", placeholder: "e.g. 12 Oak Avenue", text: $address)
                     JobFormDivider()
                     DatePicker("Date", selection: $date, displayedComponents: .date).font(.subheadline).foregroundStyle(Brand.navy)
+                    JobFormDivider()
+                    CurrencyPickerRow(currencyCode: $currencyCode)
                 }
                 JobFormHeading("Work")
                 JobFormCard {
@@ -294,10 +299,12 @@ struct CreateJobView: View {
                 defaults.bootstrap(from: jobs)
                 technician = defaults.technician(for: profile)
                 category = defaults.category()
+                currencyCode = profile?.currencyCode ?? "USD"
                 if let preset = presets.defaultPreset {
                     chosenPreset = preset
                     if !preset.technician.isEmpty { technician = preset.technician }
                     if !preset.category.isEmpty { category = preset.category }
+                    currencyCode = preset.business.currencyCode
                 }
                 didPrefill = true
             }
@@ -306,9 +313,15 @@ struct CreateJobView: View {
         let selectedPrefix = chosenPreset?.business.invoicePrefix ?? profile?.invoicePrefix ?? ""
         let prefix = selectedPrefix.isEmpty ? "FR" : selectedPrefix
         let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))"
-        let job = Job(number: number, title: title.trimmingCharacters(in: .whitespacesAndNewlines), clientName: client.trimmingCharacters(in: .whitespacesAndNewlines), siteAddress: address.trimmingCharacters(in: .whitespacesAndNewlines), category: category, issue: issue.trimmingCharacters(in: .whitespacesAndNewlines), technician: technician.trimmingCharacters(in: .whitespacesAndNewlines), businessName: profile?.businessName ?? "", currencyCode: profile?.currencyCode ?? "ZAR", taxRate: profile?.taxRate ?? "0")
+        let job = Job(number: number, title: title.trimmingCharacters(in: .whitespacesAndNewlines), clientName: client.trimmingCharacters(in: .whitespacesAndNewlines), siteAddress: address.trimmingCharacters(in: .whitespacesAndNewlines), category: category, issue: issue.trimmingCharacters(in: .whitespacesAndNewlines), technician: technician.trimmingCharacters(in: .whitespacesAndNewlines), businessName: profile?.businessName ?? "", currencyCode: currencyCode, taxRate: profile?.taxRate ?? "0")
         job.createdAt = date
-        job.applyPreset(chosenPreset ?? SavedPreset.custom(profile: profile), includeJobDefaults: false)
+        var documentPreset = chosenPreset ?? SavedPreset.custom(profile: profile)
+        if documentPreset.business.currencyCode != currencyCode {
+            documentPreset.id = UUID()
+            documentPreset.name = "Custom"
+            documentPreset.business.currencyCode = currencyCode
+        }
+        job.applyPreset(documentPreset, includeJobDefaults: false)
         context.insert(job)
         do {
             try context.save()
@@ -494,7 +507,7 @@ struct BusinessProfileView: View {
                 TextField("Email", text: $profile.email).keyboardType(.emailAddress); TextField("Phone", text: $profile.phone).keyboardType(.phonePad)
                 TextField("Address", text: $profile.address, axis: .vertical); TextField("Tax / VAT number (optional)", text: $profile.taxNumber)
             }
-            Section("Invoice defaults") { TextField("Currency code", text: $profile.currencyCode).textInputAutocapitalization(.characters); TextField("Default Tax / VAT %", text: $profile.taxRate).keyboardType(.decimalPad); TextField("Invoice prefix", text: $profile.invoicePrefix); TextField("Payment instructions", text: $profile.paymentInstructions, axis: .vertical).lineLimit(2...5) }
+            Section("Invoice defaults") { CurrencyPickerRow(currencyCode: $profile.currencyCode); TextField("Default Tax / VAT %", text: $profile.taxRate).keyboardType(.decimalPad); TextField("Invoice prefix", text: $profile.invoicePrefix); TextField("Payment instructions", text: $profile.paymentInstructions, axis: .vertical).lineLimit(2...5) }
         }.navigationTitle("Business Details")
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
             .task { await entitlements.refresh() }

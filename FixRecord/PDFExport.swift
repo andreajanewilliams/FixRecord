@@ -131,9 +131,9 @@ struct ExportView: View {
         var draft = job.documentPreset ?? SavedPreset.custom(profile: profile)
         if job.documentPreset == nil {
             if !job.businessName.isEmpty { draft.business.businessName = job.businessName }
-            draft.business.currencyCode = job.currencyCode
             draft.business.taxRate = job.taxRate
         }
+        draft.business.currencyCode = job.currencyCode
         draft.id = UUID()
         draft.name = "Custom"
         draft.technician = ""
