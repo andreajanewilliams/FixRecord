@@ -5,6 +5,18 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testHomeSearchAndStatusFilterWorkTogether() {
+        let draft = Job(number: "FR-2042", title: "Kitchen Sink Repair", clientName: "Sarah Mitchell", siteAddress: "12 Oak Avenue", category: "Plumbing", issue: "Leak", technician: "Alex", businessName: "", currencyCode: "ZAR", taxRate: "0")
+        let completed = Job(number: "FR-2043", title: "Bathroom Tap", clientName: "Mia", siteAddress: "4 Pine Road", category: "Maintenance", issue: "", technician: "", businessName: "", currencyCode: "ZAR", taxRate: "0")
+        completed.status = .completed
+        let jobs = [draft, completed]
+
+        XCTAssertEqual(JobFilter.visible(jobs, status: .all, search: "  oak  ").map(\.id), [draft.id])
+        XCTAssertEqual(JobFilter.visible(jobs, status: .draft, search: "fr-2042").map(\.id), [draft.id])
+        XCTAssertTrue(JobFilter.visible(jobs, status: .completed, search: "Sarah").isEmpty)
+        XCTAssertEqual(JobFilter.visible(jobs, status: .completed, search: "").map(\.id), [completed.id])
+    }
+
     func testDictationKeepsEarlierPhraseWhenRecognitionStartsLaterInAudio() {
         var transcript = SpeechTranscriptAccumulator()
         XCTAssertEqual(transcript.update("The pipe was leaking", firstSegmentAt: 0, lastSegmentEnd: 2.1, receivedAt: 1), "The pipe was leaking")

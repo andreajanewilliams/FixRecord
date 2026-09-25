@@ -97,11 +97,12 @@ struct RootView: View {
 struct HomeView: View {
     @Environment(\.modelContext) private var context
     @State private var jobToDelete: Job?
+    @State private var searchText = ""
     let jobs: [Job]
     @Binding var newJob: Bool
     @Binding var selectedJob: Job?
     @Binding var filter: JobFilter
-    private var visibleJobs: [Job] { jobs.filter { filter == .all || $0.status == filter.status } }
+    private var visibleJobs: [Job] { JobFilter.visible(jobs, status: filter, search: searchText) }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -115,9 +116,34 @@ struct HomeView: View {
                     Spacer()
                     Button { newJob = true } label: { Label("New Job", systemImage: "plus").font(.subheadline.bold()) }.buttonStyle(.borderedProminent)
                 }
-                Picker("Jobs", selection: $filter) { ForEach(JobFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search jobs", text: $searchText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Search jobs")
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(12)
+                .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(JobFilter.allCases, id: \.self) { option in
+                            Button { filter = option } label: {
+                                Text(option.rawValue).font(.subheadline.weight(filter == option ? .semibold : .regular))
+                                    .foregroundStyle(filter == option ? .white : Brand.navy)
+                                    .padding(.horizontal, 14).padding(.vertical, 9)
+                                    .background(filter == option ? Brand.blue : .white, in: Capsule())
+                            }
+                            .accessibilityAddTraits(filter == option ? .isSelected : [])
+                        }
+                    }
+                }
                 if visibleJobs.isEmpty {
-                    ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : "No jobs here", systemImage: "doc.text.image", description: Text(jobs.isEmpty ? "Create a job or explore an example." : "Try another filter."))
+                    ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : "No matching jobs", systemImage: searchText.isEmpty ? "doc.text.image" : "magnifyingglass", description: Text(jobs.isEmpty ? "Create a job or explore an example." : "Try a different search or status."))
                     if jobs.isEmpty { Button("Add Example Job") { context.insert(SampleJob.make()) }.buttonStyle(.bordered) }
                 } else {
                     LazyVStack(spacing: 8) { ForEach(visibleJobs) { job in
@@ -135,8 +161,18 @@ struct HomeView: View {
 }
 
 enum JobFilter: String, CaseIterable {
-    case all = "All", inProgress = "In Progress", completed = "Completed"
-    var status: JobStatus? { switch self { case .all: nil; case .inProgress: .inProgress; case .completed: .completed } }
+    case all = "All", draft = "Draft", inProgress = "In Progress", completed = "Completed"
+    var status: JobStatus? { switch self { case .all: nil; case .draft: .draft; case .inProgress: .inProgress; case .completed: .completed } }
+
+    static func visible(_ jobs: [Job], status: JobFilter, search: String) -> [Job] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return jobs.filter { job in
+            guard status == .all || job.status == status.status else { return false }
+            guard !query.isEmpty else { return true }
+            return [job.title, job.clientName, job.siteAddress, job.category, job.number]
+                .contains { $0.localizedStandardContains(query) }
+        }
+    }
 }
 
 struct JobRow: View {
