@@ -4,13 +4,15 @@ import AVFoundation
 
 @MainActor final class SpeechInputService: ObservableObject {
     @Published private(set) var listening = false
+    @Published private(set) var finalising = false
     @Published var message = ""
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    private var activeSession: UUID?
 
     func start(onTranscript: @escaping (String) -> Void) async {
-        guard !listening else { return }
+        guard !listening && !finalising else { return }
         let speechPermission = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
@@ -35,10 +37,13 @@ import AVFoundation
             input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in request.append(buffer) }
             engine.prepare()
             try engine.start()
+            let session = UUID()
+            activeSession = session
             listening = true
             message = "Listening… Tap the microphone to stop."
             task = recogniser.recognitionTask(with: request) { result, error in
                 Task { @MainActor in
+                    guard self.activeSession == session else { return }
                     if let result { onTranscript(result.bestTranscription.formattedString) }
                     if let error { self.message = error.localizedDescription; self.stop() }
                     else if result?.isFinal == true { self.stop() }
@@ -51,12 +56,14 @@ import AVFoundation
     }
 
     func stop() {
+        activeSession = nil
         if engine.isRunning { engine.stop(); engine.inputNode.removeTap(onBus: 0) }
         request?.endAudio()
         task?.cancel()
         task = nil
         request = nil
         listening = false
+        finalising = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -66,7 +73,13 @@ import AVFoundation
         request?.endAudio()
         task?.finish()
         listening = false
+        finalising = true
         message = "Finalising transcript…"
+        let session = activeSession
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            if activeSession == session && finalising { stop() }
+        }
     }
 }
 
@@ -93,6 +106,7 @@ struct VoiceTextInput: View {
                     }
                 } label: { Image(systemName: speech.listening ? "stop.circle.fill" : "mic.fill").font(.title3).foregroundStyle(speech.listening ? .red : Brand.blue) }
                     .accessibilityLabel(speech.listening ? "Stop dictation" : "Dictate \(title)")
+                    .disabled(speech.finalising)
             }
             ZStack(alignment: .topLeading) {
                 if text.isEmpty { Text(placeholder).foregroundStyle(.secondary).padding(.top, 8).padding(.leading, 5) }
