@@ -358,6 +358,21 @@ final class FixRecordTests: XCTestCase {
         let response = try JSONDecoder().decode(AIResponse.self, from: Data(#"{"reportedIssue":"issue","workCompleted":"work","completionNotes":"note","professionalSummary":"summary"}"#.utf8))
         XCTAssertEqual(response.professionalSummary, "summary")
     }
+    func testAIRequiresWorkEvidenceAndSecureEndpoint() {
+        let job = Job(number: "FR-1", title: "Kitchen Sink Repair", clientName: "", siteAddress: "",
+                      category: "", issue: "", technician: "", businessName: "", currencyCode: "USD", taxRate: "0")
+        XCTAssertFalse(AIService.hasEvidence(job: job))
+        job.issue = "The sink leaked."
+        XCTAssertFalse(AIService.hasEvidence(job: job))
+        job.roughNote = "Replaced the washer."
+        XCTAssertTrue(AIService.hasEvidence(job: job))
+        job.roughNote = ""
+        job.photos = [JobPhoto(kind: .after, filename: "after.jpg")]
+        XCTAssertTrue(AIService.hasEvidence(job: job))
+        XCTAssertNotNil(AIService.endpointURL(from: "https://example.com/api/generate-report"))
+        XCTAssertNil(AIService.endpointURL(from: "http://example.com/api/generate-report"))
+        XCTAssertNil(AIService.endpointURL(from: "$(AI_ENDPOINT)"))
+    }
     func testMatchShotLowConfidenceIsNeutral() {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120))
         let blank = renderer.image { context in UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 120, height: 120)) }

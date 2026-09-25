@@ -1,10 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash } from 'node:crypto';
 
-type Input = { installId: string; jobId: string; revenueCatAppUserId: string; jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string };
+type Input = { installId: string; jobId: string; revenueCatAppUserId: string; jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
 const required = ['reportedIssue', 'workCompleted', 'completionNotes', 'professionalSummary'] as const;
+const defaultModel = 'gpt-6-luna';
+const maxImageBytes = 900_000;
 const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; jobs: Map<string, number> }>();
 const ipMemory = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
+
+function validImage(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1_200_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  const bytes = Buffer.from(value, 'base64');
+  return bytes.length > 0 && bytes.length <= maxImageBytes && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff && bytes.toString('base64') === value;
+}
 
 function valid(body: unknown): body is Input {
   if (!body || typeof body !== 'object') return false;
@@ -14,9 +22,12 @@ function valid(body: unknown): body is Input {
     && value.revenueCatAppUserId === value.installId
     && typeof value.jobTitle === 'string' && value.jobTitle.length <= 150
     && typeof value.issueDescription === 'string' && value.issueDescription.length <= 1000
-    && typeof value.roughNotes === 'string' && value.roughNotes.length > 0 && value.roughNotes.length <= 3000
+    && typeof value.roughNotes === 'string' && value.roughNotes.length <= 3000
     && (!value.materials || (Array.isArray(value.materials) && value.materials.length <= 30 && value.materials.every(x => typeof x === 'string' && x.length <= 80)))
-    && (!value.locale || (typeof value.locale === 'string' && value.locale.length <= 40));
+    && (!value.locale || (typeof value.locale === 'string' && value.locale.length <= 40))
+    && (value.beforeImage === undefined || validImage(value.beforeImage))
+    && (value.afterImage === undefined || validImage(value.afterImage))
+    && (value.roughNotes.trim().length > 0 || value.beforeImage !== undefined || value.afterImage !== undefined);
 }
 
 async function isPro(appUserId: string): Promise<boolean> {
@@ -88,7 +99,7 @@ async function allowed(key: string, ipKey: string, installId: string, jobId: str
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!valid(req.body)) return res.status(400).json({ error: 'Invalid job facts' });
-  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_MODEL) return res.status(503).json({ error: 'AI is not configured' });
+  if (!process.env.OPENAI_API_KEY?.trim()) return res.status(503).json({ error: 'AI is not configured' });
   const input = req.body;
   const ip = String((process.env.VERCEL ? req.headers['x-vercel-forwarded-for'] : req.headers['x-forwarded-for']) ?? req.socket.remoteAddress ?? 'unknown').split(',')[0].trim().slice(0, 64);
   const ipKey = createHash('sha256').update(ip).digest('hex');
@@ -98,20 +109,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 16000);
   try {
     const schema = { type: 'object', additionalProperties: false, properties: Object.fromEntries(required.map(name => [name, { type: 'string' }])), required: [...required] };
+    const content: Array<Record<string, string>> = [
+      { type: 'input_text', text: JSON.stringify({ jobTitle: input.jobTitle, issueDescription: input.issueDescription, roughNotes: input.roughNotes, materials: input.materials ?? [], locale: input.locale ?? 'en' }) }
+    ];
+    if (input.beforeImage) content.push({ type: 'input_text', text: 'Before photo (starting condition)' }, { type: 'input_image', image_url: `data:image/jpeg;base64,${input.beforeImage}`, detail: 'high' });
+    if (input.afterImage) content.push({ type: 'input_text', text: 'After photo (finished condition)' }, { type: 'input_image', image_url: `data:image/jpeg;base64,${input.afterImage}`, detail: 'high' });
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST', signal: controller.signal,
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: process.env.OPENAI_MODEL, max_output_tokens: 350,
-        instructions: 'Improve wording using only supplied facts. Do not invent work, materials, test results, compliance, certifications, safety or success. Preserve ambiguity. Avoid verified, certified, safe and fully repaired unless explicitly supplied as the worker’s statement. Return concise professional JSON.',
-        input: JSON.stringify({ jobTitle: input.jobTitle, issueDescription: input.issueDescription, roughNotes: input.roughNotes, materials: input.materials ?? [], locale: input.locale ?? 'en' }),
+      body: JSON.stringify({ model: process.env.OPENAI_MODEL?.trim() || defaultModel, reasoning: { effort: 'none' }, store: false, max_output_tokens: 700,
+        instructions: 'Write a concise professional work note using only supplied text and visible evidence in labelled Before/After photos. Photos can show visible conditions or changes, but cannot prove the cause, exact repair, testing, safety or completion. Never infer unseen work, materials, test results, compliance, certifications or success. When work details are missing, say so plainly. Preserve ambiguity. Do not claim verified, certified, safe or fully repaired unless explicitly supplied as the worker’s statement. Return concise professional JSON.',
+        input: [{ role: 'user', content }],
         text: { format: { type: 'json_schema', name: 'work_note', strict: true, schema } } })
     });
     if (!response.ok) return res.status(502).json({ error: 'AI service unavailable' });
-    const payload = await response.json() as { output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+    const payload = await response.json() as { status?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+    if (payload.status !== 'completed') return res.status(502).json({ error: 'AI response incomplete' });
     const text = payload.output?.flatMap(x => x.content ?? []).find(x => x.type === 'output_text')?.text;
     if (!text) return res.status(502).json({ error: 'AI response unavailable' });
     const result = JSON.parse(text) as Record<string, unknown>;
-    if (!required.every(k => typeof result[k] === 'string' && (result[k] as string).length <= 2000)) return res.status(502).json({ error: 'AI response invalid' });
+    if (!required.every(k => typeof result[k] === 'string' && (result[k] as string).length <= 2000)
+      || !(result.professionalSummary as string).trim()) return res.status(502).json({ error: 'AI response invalid' });
     return res.status(200).json(result);
   } catch { return res.status(502).json({ error: 'AI service unavailable' }); }
   finally { clearTimeout(timeout); }

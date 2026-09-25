@@ -393,7 +393,7 @@ struct AboutView: View {
     var body: some View {
         List {
             Text("FixRecord"); Text("Capture. Create. Share.")
-            Text("Your jobs and photos stay on this device. AI receives text facts only when you choose Improve with AI.").font(.subheadline)
+            Text("Your jobs stay on this device. When you choose Improve with AI, the job text and up to one Before and one After photo are sent for the draft.").font(.subheadline)
             Link("Source licence", destination: URL(string: "https://www.gnu.org/licenses/agpl-3.0.html")!)
         }.navigationTitle("About")
     }

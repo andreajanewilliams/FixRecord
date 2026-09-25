@@ -2,7 +2,7 @@
   "name": "fixrecord-backend",
   "private": true,
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "tsc --noEmit false --outDir .test-dist --rootDir . && node --test tests/*.test.mjs" },
   "dependencies": { "@vercel/node": "^5.3.0" },
   "devDependencies": { "typescript": "^5.9.0", "@types/node": "^22.0.0" }
 }

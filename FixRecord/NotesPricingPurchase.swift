@@ -1,5 +1,6 @@
 import SwiftUI
 import RevenueCat
+import UIKit
 
 struct AIResponse: Codable {
     let reportedIssue: String
@@ -9,20 +10,74 @@ struct AIResponse: Codable {
 }
 
 enum AIService {
+    enum Failure: LocalizedError {
+        case notConfigured, insufficientDetail, limitReached, unavailable, invalidResponse
+        var errorDescription: String? {
+            switch self {
+            case .notConfigured: return "AI writing is not set up yet. Your note is still available."
+            case .insufficientDetail: return "Add a work note or a Before/After photo first."
+            case .limitReached: return "AI limit reached. You can keep editing your note or try again later."
+            case .unavailable: return "AI is unavailable right now. Your note is still available."
+            case .invalidResponse: return "AI could not prepare a draft. Please try again."
+            }
+        }
+    }
+    static func endpointURL(from value: String) -> URL? {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme == "https", url.host != nil else { return nil }
+        return url
+    }
+    static var endpointURL: URL? {
+        endpointURL(from: (Bundle.main.object(forInfoDictionaryKey: "AI_ENDPOINT") as? String) ?? "")
+    }
+    static var isConfigured: Bool { endpointURL != nil }
+    static func hasEvidence(job: Job) -> Bool {
+        !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || job.photos.contains { $0.kind == .before || $0.kind == .after }
+    }
+    private static func encodedPhoto(_ photo: JobPhoto?) -> String? {
+        guard let photo, let image = PhotoStore.image(photo.filename), image.size.width > 0, image.size.height > 0 else { return nil }
+        func jpeg(maxDimension: CGFloat, quality: CGFloat) -> Data? {
+            let width = CGFloat(image.cgImage?.width ?? Int(image.size.width * image.scale))
+            let height = CGFloat(image.cgImage?.height ?? Int(image.size.height * image.scale))
+            let scale = min(1, maxDimension / max(width, height))
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            let resized = UIGraphicsImageRenderer(size: CGSize(width: width * scale, height: height * scale), format: format)
+                .image { _ in image.draw(in: CGRect(x: 0, y: 0, width: width * scale, height: height * scale)) }
+            return resized.jpegData(compressionQuality: quality)
+        }
+        let preferred = jpeg(maxDimension: 1200, quality: 0.72)
+        let data = preferred.flatMap { $0.count <= 900_000 ? $0 : nil }
+            ?? jpeg(maxDimension: 900, quality: 0.55)
+        guard let data, data.count <= 900_000 else { return nil }
+        return data.base64EncodedString()
+    }
     static func improve(job: Job) async throws -> AIResponse {
-        let endpoint = (Bundle.main.object(forInfoDictionaryKey: "AI_ENDPOINT") as? String) ?? ""
-        guard let url = URL(string: endpoint), !endpoint.isEmpty else { throw URLError(.badURL) }
-        var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 20
+        guard let url = endpointURL else { throw Failure.notConfigured }
+        let after = job.photos.last { $0.kind == .after }
+        let before = job.photos.first { $0.id == after?.pairedBeforeID }
+            ?? job.photos.last { $0.kind == .before }
+        let beforeImage = encodedPhoto(before)
+        let afterImage = encodedPhoto(after)
+        guard !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || beforeImage != nil || afterImage != nil else { throw Failure.insufficientDetail }
+        var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 25
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let installID: String = {
             if let id = UserDefaults.standard.string(forKey: "installID") { return id }
             let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "installID"); return id
         }()
-        let body: [String: Any] = ["installId": installID, "jobId": job.id.uuidString, "revenueCatAppUserId": installID, "jobTitle": String(job.title.prefix(150)), "issueDescription": String(job.issue.prefix(1000)), "roughNotes": String(job.roughNote.prefix(3000)), "materials": job.items.filter { $0.kind == .material }.map(\.name), "locale": Locale.current.identifier]
+        var body: [String: Any] = ["installId": installID, "jobId": job.id.uuidString, "revenueCatAppUserId": installID, "jobTitle": String(job.title.prefix(150)), "issueDescription": String(job.issue.prefix(1000)), "roughNotes": String(job.roughNote.prefix(3000)), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { String($0.name.prefix(80)) }, "locale": Locale.current.identifier]
+        if let beforeImage { body["beforeImage"] = beforeImage }
+        if let afterImage { body["afterImage"] = afterImage }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
-        return try JSONDecoder().decode(AIResponse.self, from: data)
+        guard let http = response as? HTTPURLResponse else { throw Failure.unavailable }
+        if http.statusCode == 429 { throw Failure.limitReached }
+        guard (200..<300).contains(http.statusCode) else { throw Failure.unavailable }
+        guard let result = try? JSONDecoder().decode(AIResponse.self, from: data),
+              !result.professionalSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.invalidResponse }
+        return result
     }
 }
 
@@ -35,7 +90,15 @@ struct NotesView: View {
         Form {
             Section { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue) }
             Section { VoiceTextInput(title: "Work Completed", placeholder: "Describe what you completed…", text: $job.roughNote) }
-            Section { Button { Task { await improve() } } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }.disabled(busy || job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            Section {
+                Button { Task { await improve() } } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }
+                    .disabled(busy || !AIService.isConfigured || !AIService.hasEvidence(job: job))
+                if !AIService.hasEvidence(job: job) {
+                    Text("Add a work note or a Before/After photo to use AI.").font(.caption).foregroundStyle(.secondary)
+                } else if !AIService.isConfigured {
+                    Text("AI writing will be available after setup.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if !message.isEmpty { Section { Text(message).font(.caption).foregroundStyle(.secondary) } }
             if !draft.isEmpty {
                 Section("AI-assisted draft · review and edit") {
@@ -56,7 +119,7 @@ struct NotesView: View {
     private func improve() async {
         busy = true; defer { busy = false }
         do { draft = try await AIService.improve(job: job).professionalSummary; message = "Review and edit this AI-assisted draft. It has not verified the work." }
-        catch { message = "AI is unavailable. Your manual note is saved and can be used in the report." }
+        catch { message = (error as? AIService.Failure)?.localizedDescription ?? AIService.Failure.unavailable.localizedDescription }
     }
 }
 
