@@ -15,12 +15,14 @@ final class FixRecordTests: XCTestCase {
         original.receipts = [ReceiptRecord(merchant: "Supplier", date: Date(), number: "123", filename: "old-receipt", items: original.items, confirmed: true)]
         var preset = SavedPreset.custom(profile: nil)
         preset.business.businessName = "Turner Maintenance"
+        preset.business.invoicePrefix = "ACME-ZA"
         original.documentPreset = preset
 
         let copy = original.duplicated(number: "FR-NEW-001")
 
         XCTAssertNotEqual(copy.id, original.id)
         XCTAssertEqual(copy.number, "FR-NEW-001")
+        XCTAssertEqual(original.duplicateNumberPrefix, "ACME-ZA")
         XCTAssertEqual(copy.title, original.title)
         XCTAssertEqual(copy.clientName, original.clientName)
         XCTAssertEqual(copy.clientEmail, original.clientEmail)
@@ -38,7 +40,7 @@ final class FixRecordTests: XCTestCase {
         XCTAssertTrue(copy.receipts.isEmpty)
         XCTAssertTrue(copy.roughNote.isEmpty)
         XCTAssertTrue(copy.professionalNote.isEmpty)
-        XCTAssertTrue(copy.invoiceNotes.isEmpty)
+        XCTAssertEqual(copy.invoiceNotes, original.invoiceNotes)
         XCTAssertEqual(copy.items.map(\.name), original.items.map(\.name))
         XCTAssertTrue(copy.items.allSatisfy { $0.sourceReceiptID == nil })
         XCTAssertTrue(zip(copy.items, original.items).allSatisfy { $0.id != $1.id })

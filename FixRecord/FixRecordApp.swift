@@ -166,7 +166,7 @@ struct HomeView: View {
             } message: { Text(duplicateError ?? "") }
     }
     private func duplicate(_ job: Job) {
-        let prefix = job.number.split(separator: "-").first.map(String.init) ?? "FR"
+        let prefix = job.duplicateNumberPrefix
         let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4))"
         let copy = job.duplicated(number: number)
         context.insert(copy)

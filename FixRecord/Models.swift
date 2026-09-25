@@ -230,12 +230,17 @@ struct ReceiptRecord: Codable, Identifiable {
         copy.clientEmail = clientEmail
         copy.clientPhone = clientPhone
         copy.discount = discount
+        copy.invoiceNotes = invoiceNotes
         copy.documentPreset = documentPreset
         copy.items = items.compactMap { item in
             guard !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return PriceItem(kind: item.kind, name: item.name, quantity: item.quantity, unitPrice: item.unitPrice)
         }
         return copy
+    }
+    var duplicateNumberPrefix: String {
+        let savedPrefix = documentPreset?.business.invoicePrefix.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return savedPrefix.isEmpty ? (number.split(separator: "-").first.map(String.init) ?? "FR") : savedPrefix
     }
     var summary: String { professionalNote.isEmpty ? roughNote : professionalNote }
 }
