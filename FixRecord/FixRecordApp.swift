@@ -130,19 +130,9 @@ struct HomeView: View {
                 }
                 .padding(12)
                 .background(.white, in: RoundedRectangle(cornerRadius: 12))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(JobFilter.allCases, id: \.self) { option in
-                            Button { filter = option } label: {
-                                Text(option.rawValue).font(.subheadline.weight(filter == option ? .semibold : .regular))
-                                    .foregroundStyle(filter == option ? .white : Brand.navy)
-                                    .padding(.horizontal, 14).padding(.vertical, 9)
-                                    .background(filter == option ? Brand.blue : .white, in: Capsule())
-                            }
-                            .accessibilityAddTraits(filter == option ? .isSelected : [])
-                        }
-                    }
-                }
+                Picker("Jobs", selection: $filter) {
+                    ForEach(JobFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented)
                 if visibleJobs.isEmpty {
                     ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : "No matching jobs", systemImage: searchText.isEmpty ? "doc.text.image" : "magnifyingglass", description: Text(jobs.isEmpty ? "Create a job or explore an example." : "Try a different search or status."))
                     if jobs.isEmpty { Button("Add Example Job") { context.insert(SampleJob.make()) }.buttonStyle(.bordered) }
@@ -183,8 +173,8 @@ struct HomeView: View {
 }
 
 enum JobFilter: String, CaseIterable {
-    case all = "All", draft = "Draft", inProgress = "In Progress", completed = "Completed"
-    var status: JobStatus? { switch self { case .all: nil; case .draft: .draft; case .inProgress: .inProgress; case .completed: .completed } }
+    case all = "All", inProgress = "In Progress", completed = "Completed"
+    var status: JobStatus? { switch self { case .all: nil; case .inProgress: .inProgress; case .completed: .completed } }
 
     static func visible(_ jobs: [Job], status: JobFilter, search: String) -> [Job] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
