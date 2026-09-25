@@ -223,6 +223,20 @@ struct ReceiptRecord: Codable, Identifiable {
             documentPreset = preset
         }
     }
+    func duplicated(number newNumber: String) -> Job {
+        let copy = Job(number: newNumber, title: title, clientName: clientName, siteAddress: siteAddress,
+                       category: category, issue: issue, technician: technician, businessName: businessName,
+                       currencyCode: currencyCode, taxRate: taxRate)
+        copy.clientEmail = clientEmail
+        copy.clientPhone = clientPhone
+        copy.discount = discount
+        copy.documentPreset = documentPreset
+        copy.items = items.compactMap { item in
+            guard !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return PriceItem(kind: item.kind, name: item.name, quantity: item.quantity, unitPrice: item.unitPrice)
+        }
+        return copy
+    }
     var summary: String { professionalNote.isEmpty ? roughNote : professionalNote }
 }
 

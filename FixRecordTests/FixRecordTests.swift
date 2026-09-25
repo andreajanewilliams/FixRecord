@@ -5,6 +5,45 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testDuplicatedJobKeepsReusableDetailsButStartsFresh() {
+        let original = SampleJob.make()
+        original.clientEmail = "sarah@example.com"
+        original.paid = true
+        var pricedItems = original.items
+        pricedItems[0].sourceReceiptID = UUID()
+        original.items = pricedItems
+        original.receipts = [ReceiptRecord(merchant: "Supplier", date: Date(), number: "123", filename: "old-receipt", items: original.items, confirmed: true)]
+        var preset = SavedPreset.custom(profile: nil)
+        preset.business.businessName = "Turner Maintenance"
+        original.documentPreset = preset
+
+        let copy = original.duplicated(number: "FR-NEW-001")
+
+        XCTAssertNotEqual(copy.id, original.id)
+        XCTAssertEqual(copy.number, "FR-NEW-001")
+        XCTAssertEqual(copy.title, original.title)
+        XCTAssertEqual(copy.clientName, original.clientName)
+        XCTAssertEqual(copy.clientEmail, original.clientEmail)
+        XCTAssertEqual(copy.siteAddress, original.siteAddress)
+        XCTAssertEqual(copy.issue, original.issue)
+        XCTAssertEqual(copy.documentPreset, original.documentPreset)
+        XCTAssertEqual(copy.currencyCode, original.currencyCode)
+        XCTAssertEqual(copy.status, .draft)
+        XCTAssertNil(copy.completedAt)
+        XCTAssertGreaterThan(copy.createdAt, original.createdAt)
+        XCTAssertFalse(copy.technicianConfirmed)
+        XCTAssertFalse(copy.paid)
+        XCTAssertFalse(copy.isSample)
+        XCTAssertTrue(copy.photos.isEmpty)
+        XCTAssertTrue(copy.receipts.isEmpty)
+        XCTAssertTrue(copy.roughNote.isEmpty)
+        XCTAssertTrue(copy.professionalNote.isEmpty)
+        XCTAssertTrue(copy.invoiceNotes.isEmpty)
+        XCTAssertEqual(copy.items.map(\.name), original.items.map(\.name))
+        XCTAssertTrue(copy.items.allSatisfy { $0.sourceReceiptID == nil })
+        XCTAssertTrue(zip(copy.items, original.items).allSatisfy { $0.id != $1.id })
+    }
+
     func testCurrencyDefaultsAndCustomCodes() {
         XCTAssertEqual(BusinessProfile().currencyCode, "USD")
         XCTAssertEqual(SavedPreset.custom(profile: nil).business.currencyCode, "USD")

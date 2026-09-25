@@ -97,6 +97,7 @@ struct RootView: View {
 struct HomeView: View {
     @Environment(\.modelContext) private var context
     @State private var jobToDelete: Job?
+    @State private var duplicateError: String?
     @State private var searchText = ""
     let jobs: [Job]
     @Binding var newJob: Bool
@@ -148,7 +149,10 @@ struct HomeView: View {
                 } else {
                     LazyVStack(spacing: 8) { ForEach(visibleJobs) { job in
                         Button { selectedJob = job } label: { JobRow(job: job) }.buttonStyle(.plain)
-                            .contextMenu { Button("Delete job", role: .destructive) { jobToDelete = job } }
+                            .contextMenu {
+                                Button { duplicate(job) } label: { Label("Duplicate Job", systemImage: "plus.square.on.square") }
+                                Button("Delete job", role: .destructive) { jobToDelete = job }
+                            }
                     } }
                 }
             }.padding(18)
@@ -157,6 +161,24 @@ struct HomeView: View {
                 Button("Delete", role: .destructive) { if let job = jobToDelete { for photo in job.photos { PhotoStore.delete(photo.filename) }; for receipt in job.receipts { PhotoStore.delete(receipt.filename) }; context.delete(job) }; jobToDelete = nil }
                 Button("Cancel", role: .cancel) { jobToDelete = nil }
             } message: { Text("This removes the local record and its photos.") }
+            .alert("Could not duplicate job", isPresented: Binding(get: { duplicateError != nil }, set: { if !$0 { duplicateError = nil } })) {
+                Button("OK") { duplicateError = nil }
+            } message: { Text(duplicateError ?? "") }
+    }
+    private func duplicate(_ job: Job) {
+        let prefix = job.number.split(separator: "-").first.map(String.init) ?? "FR"
+        let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4))"
+        let copy = job.duplicated(number: number)
+        context.insert(copy)
+        do {
+            try context.save()
+            filter = .all
+            searchText = ""
+            selectedJob = copy
+        } catch {
+            context.delete(copy)
+            duplicateError = "The duplicate could not be saved. Please try again."
+        }
     }
 }
 
