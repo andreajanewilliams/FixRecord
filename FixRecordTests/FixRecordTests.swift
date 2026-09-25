@@ -343,6 +343,30 @@ final class FixRecordTests: XCTestCase {
         XCTAssertFalse(ReceiptParser.canConfirm(incomplete))
     }
 
+    func testReceiptParserReadsCurrencyQuantitiesAndSeparateUnitPrices() {
+        let receipt = ["BUILDER'S SUPPLY", "DATE: 03/18/2026 TIME: 10:52:41 PM", "STORE # 042", "REG # 03", "CASHIER TOM", "TRANS # 371501855063", "DRILL 20V #SKU123 $89.99", "2 x 2X4X8 LUMBER #SKU456 @ $10.98", "$5.49", "SCREWS 100CT #SKU789 $8.99", "3 x SANDPAPER 80G #SKU012 @ $11.97", "$3.99", "SUBTOTAL $121.93", "TAX (6.5%) $7.93", "TOTAL $129.86", "PAYMENT CASH"]
+        let parsed = ReceiptParser.parse(receipt)
+        XCTAssertEqual(parsed.merchant, "BUILDER'S SUPPLY")
+        XCTAssertEqual(parsed.items.count, 4)
+        XCTAssertEqual(parsed.items.map(\.quantity), ["1", "2", "1", "3"])
+        XCTAssertEqual(parsed.items.map(\.unitPrice), ["89.99", "5.49", "8.99", "3.99"])
+        XCTAssertEqual(parsed.items.map(\.name), ["DRILL 20V #SKU123", "2X4X8 LUMBER #SKU456", "SCREWS 100CT #SKU789", "SANDPAPER 80G #SKU012"])
+        XCTAssertTrue(ReceiptParser.canConfirm(parsed.items))
+        XCTAssertEqual(parsed.total, "$129.86")
+    }
+
+    func testReceiptParserMergesSeparateNameAndPriceFragments() {
+        let fragments = [
+            ReceiptParser.Fragment(text: "R 89,99", x: 0.85, y: 0.65, height: 0.025),
+            ReceiptParser.Fragment(text: "PVC Connector", x: 0.2, y: 0.651, height: 0.025),
+            ReceiptParser.Fragment(text: "Rubber washer", x: 0.2, y: 0.60, height: 0.025),
+            ReceiptParser.Fragment(text: "R 12,50", x: 0.85, y: 0.60, height: 0.025)
+        ]
+        let parsed = ReceiptParser.parse(ReceiptParser.lines(from: fragments))
+        XCTAssertEqual(parsed.items.map(\.name), ["PVC Connector", "Rubber washer"])
+        XCTAssertEqual(parsed.items.map(\.unitPrice), ["89.99", "12.5"])
+    }
+
     func testJobSurvivesSwiftDataSave() throws {
         let container = try ModelContainer(for: Job.self, BusinessProfile.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let writer = ModelContext(container)

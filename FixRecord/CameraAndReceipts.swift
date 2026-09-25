@@ -199,9 +199,15 @@ struct ReceiptView: View {
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 TextField("Receipt number", text: $number)
                 if !detectedTotal.isEmpty { LabeledContent("Receipt total", value: detectedTotal) }
+                HStack {
+                    Text("Job currency")
+                    Spacer()
+                    TextField("Code", text: $job.currencyCode)
+                        .multilineTextAlignment(.trailing).textInputAutocapitalization(.characters).frame(width: 80)
+                }
+                Text("Prices are copied from the receipt without currency conversion.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Items found") {
-                if rows.isEmpty { Text("No items found. Add them manually or retake the receipt.").font(.subheadline).foregroundStyle(.secondary) }
                 ForEach($rows) { $row in
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("Item", text: $row.name)
@@ -215,7 +221,10 @@ struct ReceiptView: View {
             }
             Section {
                 PrimaryButton(title: "Add Items to Job", icon: "checkmark") { confirm() }.disabled(!ReceiptParser.canConfirm(rows))
-                if !ReceiptParser.canConfirm(rows) { Text("Review each item's name, quantity and price.").font(.caption).foregroundStyle(.secondary) }
+                if !ReceiptParser.canConfirm(rows) {
+                    Text(rows.isEmpty ? "Tap Add Item to enter a material, or retake the receipt." : "Check every item's name, quantity and price before adding.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Button("Retake Receipt") { image = nil; rows = []; message = ""; showingCamera = true }
             }
         }
@@ -242,11 +251,17 @@ struct ReceiptView: View {
                 request.recognitionLevel = .accurate
                 request.usesLanguageCorrection = true
                 try VNImageRequestHandler(cgImage: cg, orientation: orientation).perform([request])
-                return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                let fragments = (request.results ?? []).compactMap { observation -> ReceiptParser.Fragment? in
+                    guard let text = observation.topCandidates(1).first?.string else { return nil }
+                    return ReceiptParser.Fragment(text: text, x: observation.boundingBox.midX, y: observation.boundingBox.midY, height: observation.boundingBox.height)
+                }
+                return ReceiptParser.lines(from: fragments)
             }.value
             let parsed = ReceiptParser.parse(lines)
             merchant = parsed.merchant; number = parsed.number; rows = parsed.items; date = parsed.date ?? Date(); detectedTotal = parsed.total
-            message = rows.isEmpty ? "No items were recognised. Add them manually or retake the receipt." : "Review every field before adding materials. OCR can make mistakes."
+            message = rows.isEmpty
+                ? "We couldn't recognise any items from this receipt. You can enter them manually or retake the photo."
+                : "Check the suggested items below. OCR can miss or misread names, quantities and prices; add anything missing manually."
         } catch { message = "Text recognition failed. You can add and edit materials manually." }
     }
     private func confirm() {
@@ -289,6 +304,26 @@ struct ReceiptCamera: UIViewControllerRepresentable {
 }
 
 enum ReceiptParser {
+    struct Fragment {
+        let text: String
+        let x: CGFloat
+        let y: CGFloat
+        let height: CGFloat
+    }
+
+    static func lines(from fragments: [Fragment]) -> [String] {
+        var rows: [[Fragment]] = []
+        for fragment in fragments.sorted(by: { $0.y == $1.y ? $0.x < $1.x : $0.y > $1.y }) {
+            if let index = rows.indices.last, let first = rows[index].first,
+               abs(first.y - fragment.y) <= max(0.012, min(first.height, fragment.height) * 0.5) {
+                rows[index].append(fragment)
+            } else {
+                rows.append([fragment])
+            }
+        }
+        return rows.map { row in row.sorted { $0.x < $1.x }.map(\.text).joined(separator: " ") }
+    }
+
     static func canConfirm(_ rows: [PriceItem]) -> Bool {
         !rows.isEmpty && rows.allSatisfy {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -299,8 +334,19 @@ enum ReceiptParser {
     static func parse(_ lines: [String]) -> (merchant: String, number: String, date: Date?, total: String, items: [PriceItem]) {
         let merchant = lines.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
         let number = lines.first(where: { $0.lowercased().contains("receipt") || $0.lowercased().contains("invoice") })?.components(separatedBy: .whitespaces).last ?? ""
-        let expression = try! NSRegularExpression(pattern: #"^(.+?)\s+(\d+[.,]\d{2})$"#)
-        let excluded = ["total", "tax", "vat", "subtotal", "change", "balance"]
+        let amount = #"\d+(?:[., ']\d{3})*[.,]\d{2}"#
+        let currency = #"(?:\p{Sc}|ZAR|USD|EUR|GBP|CAD|AUD|R)"#
+        let pricedLine = try! NSRegularExpression(pattern: "(?i)^(.+?)\\s+(?:\(currency)\\s*)?(\(amount))\\s*(?:USD|EUR|GBP|ZAR|CAD|AUD)?$" )
+        let amountOnly = try! NSRegularExpression(pattern: "(?i)^(?:\(currency)\\s*)?(\(amount))\\s*(?:USD|EUR|GBP|ZAR|CAD|AUD)?$" )
+        let quantityPrefix = try! NSRegularExpression(pattern: #"(?i)^(\d+(?:[.,]\d+)?)\s*[x×]\s+(.+)$"#)
+        let unitPriceSuffix = try! NSRegularExpression(pattern: "(?i)^(.+?)\\s+@\\s*(?:\(currency)\\s*)?(\(amount))$" )
+        let excluded = try! NSRegularExpression(pattern: #"(?i)^(?:sub\s*total|grand\s*total|total|tax|vat|change|balance|cash|card\b|payment|tender|discount|amount\s+due|receipt|invoice|store\b|reg\b|cashier|trans\b)\b"#)
+        func capture(_ regex: NSRegularExpression, in text: String, at index: Int) -> String? {
+            guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+                  let range = Range(match.range(at: index), in: text) else { return nil }
+            return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func decimal(_ text: String) -> Decimal? { Money.decimal(text.replacingOccurrences(of: "'", with: "")) }
         let date = lines.compactMap { line -> Date? in
             for format in ["dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-dd"] {
                 let formatter = DateFormatter(); formatter.dateFormat = format; formatter.isLenient = false
@@ -310,12 +356,40 @@ enum ReceiptParser {
         }.first
         let totalLine = lines.last(where: { $0.lowercased().contains("total") && !$0.lowercased().contains("subtotal") }) ?? ""
         let total = totalLine.components(separatedBy: .whitespaces).last ?? ""
-        let items = lines.compactMap { line -> PriceItem? in
-            let range = NSRange(line.startIndex..<line.endIndex, in: line)
-            guard let match = expression.firstMatch(in: line, range: range), let nameRange = Range(match.range(at: 1), in: line), let priceRange = Range(match.range(at: 2), in: line) else { return nil }
-            let name = String(line[nameRange]).trimmingCharacters(in: .whitespaces)
-            guard !excluded.contains(where: { name.lowercased().contains($0) }) else { return nil }
-            return PriceItem(kind: .material, name: name, unitPrice: String(line[priceRange]).replacingOccurrences(of: ",", with: "."))
+        let items = lines.enumerated().compactMap { index, line -> PriceItem? in
+            guard var name = capture(pricedLine, in: line, at: 1),
+                  let totalText = capture(pricedLine, in: line, at: 2),
+                  let total = decimal(totalText), total >= 0,
+                  name.rangeOfCharacter(from: .letters) != nil,
+                  excluded.firstMatch(in: name, range: NSRange(name.startIndex..<name.endIndex, in: name)) == nil else { return nil }
+
+            var quantity: Decimal = 1
+            if let count = capture(quantityPrefix, in: name, at: 1),
+               let parsed = decimal(count), parsed > 0,
+               let description = capture(quantityPrefix, in: name, at: 2) {
+                quantity = parsed
+                name = description
+            }
+
+            var unitPrice = total
+            if let description = capture(unitPriceSuffix, in: name, at: 1),
+               let amountText = capture(unitPriceSuffix, in: name, at: 2),
+               let candidate = decimal(amountText), Money.rounded(candidate * quantity) == Money.rounded(total) {
+                name = description
+                unitPrice = candidate
+            } else if quantity > 1, index + 1 < lines.count,
+                      let amountText = capture(amountOnly, in: lines[index + 1], at: 1),
+                      let candidate = decimal(amountText), Money.rounded(candidate * quantity) == Money.rounded(total) {
+                unitPrice = candidate
+            } else if quantity > 1 {
+                var divided = total / quantity
+                NSDecimalRound(&unitPrice, &divided, 4, .plain)
+            }
+            name = name.trimmingCharacters(in: CharacterSet(charactersIn: " @"))
+            guard !name.isEmpty else { return nil }
+            return PriceItem(kind: .material, name: name,
+                             quantity: NSDecimalNumber(decimal: quantity).stringValue,
+                             unitPrice: NSDecimalNumber(decimal: unitPrice).stringValue)
         }
         return (merchant, number, date, total, items)
     }
