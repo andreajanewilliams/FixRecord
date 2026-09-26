@@ -26,7 +26,7 @@ function request(overrides = {}) {
   return {
     method: 'POST', headers: { 'x-fixrecord-access-code': 'test-code-12345678901234567890' }, socket: { remoteAddress: '127.0.0.1' },
     body: {
-      jobTitle: 'Kitchen Sink Repair', issueDescription: 'A leaking connection',
+      installId: crypto.randomUUID(), jobTitle: 'Kitchen Sink Repair', issueDescription: 'A leaking connection',
       roughNotes: '', materials: [], locale: 'en-ZA',
       ...overrides
     }
@@ -74,11 +74,12 @@ test('Luna request includes labelled photos and keeps the access code out of mod
     assert.equal((await sharp(bytes).metadata()).format, 'jpeg');
   }
   assert.ok(!JSON.stringify(upstream).includes(req.headers['x-fixrecord-access-code']));
+  assert.ok(!JSON.stringify(upstream).includes(req.body.installId));
 });
 
 test('rejects requests with no work evidence or invalid image data before spending quota', async () => {
   globalThis.fetch = async () => { throw new Error('invalid inputs must not reach the model'); };
-  for (const overrides of [{}, { beforeImage: Buffer.from('not a jpeg').toString('base64') }, { beforeImage: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') }]) {
+  for (const overrides of [{}, { installId: 'invalid', roughNotes: 'Replaced the washer.' }, { beforeImage: Buffer.from('not a jpeg').toString('base64') }, { beforeImage: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') }]) {
     const req = request(overrides);
     const res = response();
     await handler(req, res);
@@ -126,8 +127,9 @@ test('Free allows three AI requests per month, including retries on one job', as
   assert.equal(modelCalls, 3);
 });
 
-test('a Free access code cannot reset its limit or claim Pro by changing client IDs', async () => {
+test('an installation cannot claim Pro by changing subscriber IDs', async () => {
   const code = freshAccessCode();
+  const installId = crypto.randomUUID();
   let modelCalls = 0;
   globalThis.fetch = async () => {
     modelCalls++;
@@ -136,7 +138,7 @@ test('a Free access code cannot reset its limit or claim Pro by changing client 
   for (let count = 1; count <= 4; count++) {
     const req = request({ roughNotes: 'Replaced the washer.' });
     req.headers['x-fixrecord-access-code'] = code;
-    req.body.installId = crypto.randomUUID();
+    req.body.installId = installId;
     req.body.revenueCatAppUserId = 'claimed-pro-id';
     req.socket.remoteAddress = '192.0.2.81';
     const res = response();
@@ -171,7 +173,14 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
   globalThis.fetch = async (url, options) => {
     if (url === 'https://example.upstash.io/pipeline') {
       const commands = JSON.parse(options.body);
-      return new Response(JSON.stringify(commands.map(([command, key]) => {
+      return new Response(JSON.stringify(commands.map(([command, key, ...args]) => {
+        if (command === 'EVAL') {
+          const [, monthlyKey, totalKey, limit] = args;
+          if ((counters.get(monthlyKey) ?? 0) >= limit || (counters.get(totalKey) ?? 0) >= 300) return { result: 0 };
+          counters.set(monthlyKey, (counters.get(monthlyKey) ?? 0) + 1);
+          counters.set(totalKey, (counters.get(totalKey) ?? 0) + 1);
+          return { result: 1 };
+        }
         if (command === 'INCR') {
           const value = (counters.get(key) ?? 0) + 1;
           counters.set(key, value);
@@ -191,6 +200,22 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
       assert.equal(res.statusCode, count <= 3 ? 200 : 429);
     }
     assert.equal(modelCalls, 3);
+    // A second installation shares the code but gets its own allowance.
+    req.body.installId = crypto.randomUUID();
+    const second = response();
+    await handler(req, second);
+    assert.equal(second.statusCode, 200);
+    counters.set('fixrecord:judging-total', 299);
+    req.body.installId = crypto.randomUUID();
+    const last = response();
+    await handler(req, last);
+    assert.equal(last.statusCode, 200);
+    req.body.installId = crypto.randomUUID();
+    const exhausted = response();
+    await handler(req, exhausted);
+    assert.equal(exhausted.statusCode, 429);
+    assert.equal(modelCalls, 5);
+    assert.equal(counters.get('fixrecord:judging-total'), 300);
   } finally {
     delete process.env.VERCEL;
     delete process.env.UPSTASH_REDIS_REST_URL;

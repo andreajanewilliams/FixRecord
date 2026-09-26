@@ -2,12 +2,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import sharp from 'sharp';
 
-type Input = { jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
+type Input = { installId: string; jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
 type AccessIdentity = { id: string; isPro: boolean };
 const required = ['reportedIssue', 'workCompleted', 'completionNotes', 'professionalSummary'] as const;
 const defaultModel = 'gpt-6-luna';
 const maxImageBytes = 900_000;
 const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; monthlyCount: number }>();
+let judgingRequests = 0;
 const ipMemory = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
 
 function accessIdentity(req: VercelRequest): AccessIdentity | undefined {
@@ -43,7 +44,8 @@ async function normaliseImage(value: string | undefined): Promise<string | undef
 function valid(body: unknown): body is Input {
   if (!body || typeof body !== 'object') return false;
   const value = body as Record<string, unknown>;
-  return typeof value.jobTitle === 'string' && value.jobTitle.length <= 150
+  return typeof value.installId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.installId)
+    && typeof value.jobTitle === 'string' && value.jobTitle.length <= 150
     && typeof value.issueDescription === 'string' && value.issueDescription.length <= 1000
     && typeof value.roughNotes === 'string' && value.roughNotes.length <= 3000
     && (!value.materials || (Array.isArray(value.materials) && value.materials.length <= 30 && value.materials.every(x => typeof x === 'string' && x.length <= 80)))
@@ -73,7 +75,7 @@ async function allowedIP(ipKey: string): Promise<boolean> {
   return state.minuteCount <= 30 && state.dayCount <= 100;
 }
 
-async function allowed(key: string, access: AccessIdentity): Promise<boolean> {
+async function allowed(key: string, installId: string, access: AccessIdentity): Promise<boolean> {
   const now = Date.now();
   const minute = Math.floor(now / 60000), day = Math.floor(now / 86400000);
   const month = new Date(now).getUTCFullYear() * 12 + new Date(now).getUTCMonth();
@@ -90,21 +92,29 @@ async function allowed(key: string, access: AccessIdentity): Promise<boolean> {
       const result = await redis([['INCR', redisKey], ['EXPIRE', redisKey, ttl]]);
       if ((result?.[0]?.result ?? max + 1) > max) return false;
     }
-    const global = await redis([['INCR', `fixrecord:global:${day}`], ['EXPIRE', `fixrecord:global:${day}`, 172800]]);
-    if ((global?.[0]?.result ?? 1001) > 1000) return false;
-    const monthlyLimit = access.isPro ? 30 : 3;
-    const usage = await redis([['INCR', `fixrecord:requests:${month}:${access.id}`], ['EXPIRE', `fixrecord:requests:${month}:${access.id}`, 2678400]]);
-    return (usage[0]?.result ?? monthlyLimit + 1) <= monthlyLimit;
+    // Reserve both allowances atomically. The judging total has no expiry.
+    const script = `
+      local monthly = tonumber(redis.call('GET', KEYS[1]) or '0')
+      local total = tonumber(redis.call('GET', KEYS[2]) or '0')
+      if monthly >= tonumber(ARGV[1]) or total >= 300 then return 0 end
+      redis.call('INCR', KEYS[1])
+      redis.call('EXPIRE', KEYS[1], 2678400)
+      redis.call('INCR', KEYS[2])
+      return 1`;
+    const usage = await redis([['EVAL', script, 2, `fixrecord:install-requests:${month}:${installId}`, 'fixrecord:judging-total', access.isPro ? 30 : 3]]);
+    return usage[0]?.result === 1;
   }
   if (process.env.VERCEL) return false;
-  const state = memory.get(access.id) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
+  const state = memory.get(installId) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
   if (state.minute !== minute) { state.minute = minute; state.minuteCount = 0; }
   if (state.day !== day) { state.day = day; state.dayCount = 0; }
   if (state.month !== month) { state.month = month; state.monthlyCount = 0; }
-  state.minuteCount++; state.dayCount++; state.monthlyCount++;
-  memory.set(access.id, state);
+  state.minuteCount++; state.dayCount++;
+  memory.set(installId, state);
   if (state.minuteCount > 6 || state.dayCount > 100) return false;
-  return state.monthlyCount <= (access.isPro ? 30 : 3);
+  if (state.monthlyCount >= (access.isPro ? 30 : 3) || judgingRequests >= 300) return false;
+  state.monthlyCount++; judgingRequests++;
+  return true;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -125,8 +135,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     beforeImage = await normaliseImage(input.beforeImage);
     afterImage = await normaliseImage(input.afterImage);
   } catch { return res.status(400).json({ error: 'Invalid job photo' }); }
-  const key = `${access.id}:${ipKey}`;
-  try { if (!(await allowed(key, access))) return res.status(429).json({ error: 'AI limit reached' }); }
+  const installId = input.installId.toLowerCase();
+  const key = `${installId}:${ipKey}`;
+  try { if (!(await allowed(key, installId, access))) return res.status(429).json({ error: 'AI limit reached' }); }
   catch { return res.status(503).json({ error: 'Usage service unavailable' }); }
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 16000);
   try {

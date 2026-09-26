@@ -113,7 +113,10 @@ enum AIService {
         var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 25
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accessCode, forHTTPHeaderField: "X-FixRecord-Access-Code")
-        var body: [String: Any] = ["jobTitle": clipped(job.title, maxUTF16Units: 150), "issueDescription": clipped(job.issue, maxUTF16Units: 1000), "roughNotes": clipped(job.roughNote, maxUTF16Units: 3000), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { clipped($0.name, maxUTF16Units: 80) }, "locale": clipped(Locale.current.identifier, maxUTF16Units: 40)]
+        let installKey = "aiInstallationID"
+        let installID = UserDefaults.standard.string(forKey: installKey) ?? UUID().uuidString
+        UserDefaults.standard.set(installID, forKey: installKey)
+        var body: [String: Any] = ["installId": installID, "jobTitle": clipped(job.title, maxUTF16Units: 150), "issueDescription": clipped(job.issue, maxUTF16Units: 1000), "roughNotes": clipped(job.roughNote, maxUTF16Units: 3000), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { clipped($0.name, maxUTF16Units: 80) }, "locale": clipped(Locale.current.identifier, maxUTF16Units: 40)]
         if let beforeImage { body["beforeImage"] = beforeImage }
         if let afterImage { body["afterImage"] = afterImage }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
