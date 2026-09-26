@@ -286,20 +286,18 @@ struct SettingsView: View {
 }
 
 struct AIAccessCodeView: View {
+    var warning: String? = nil
+    var onSaved: (() -> Void)? = nil
     @State private var code = ""
     @State private var saved = false
     @State private var message = ""
     var body: some View {
         Form {
             Section {
+                if let warning { Label(warning, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(.orange) }
                 SecureField("Access code", text: $code)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Button("Save Code") {
-                    saved = AIAccessCodeStore.save(code)
-                    message = saved ? "Code saved on this device." : "Enter the full access code supplied for the demo."
-                    if saved { code = "" }
-                }.disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if saved { Button("Remove Code", role: .destructive) { AIAccessCodeStore.remove(); saved = false; message = "Code removed." } }
             } footer: {
                 Text("Enter the judging code from the submission notes. Can’t find it? [Email Andrea](mailto:andreajanewilliams2@gmail.com)")
@@ -307,6 +305,29 @@ struct AIAccessCodeView: View {
             if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
         }
         .navigationTitle("AI Access Code")
+        .safeAreaInset(edge: .bottom) {
+            Button {
+                let didSave = AIAccessCodeStore.save(code)
+                saved = AIAccessCodeStore.load() != nil
+                message = didSave ? "Code saved on this device." : "Enter the full access code supplied for the demo."
+                if didSave {
+                    code = ""
+                    onSaved?()
+                }
+            } label: {
+                Label("Save code", systemImage: "checkmark")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(14)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray : Brand.blue, in: RoundedRectangle(cornerRadius: 13))
+            .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(Brand.background)
+        }
         .onAppear { saved = AIAccessCodeStore.load() != nil }
     }
 }

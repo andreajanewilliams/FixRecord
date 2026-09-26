@@ -43,7 +43,7 @@ enum AIService {
         var errorDescription: String? {
             switch self {
             case .notConfigured: return "AI writing is not set up yet. Your note is still available."
-            case .accessCodeRequired: return "Enter your AI access code in Settings to use AI writing."
+            case .accessCodeRequired: return "Enter the judging code to use AI writing."
             case .insufficientDetail: return "Add a work note or a Before/After photo first."
             case .limitReached: return "AI limit reached. You can keep editing your note or try again later."
             case .unavailable: return "AI is unavailable right now. Your note is still available."
@@ -137,21 +137,20 @@ struct NotesView: View {
     @State private var message = ""
     @State private var busy = false
     @State private var hasPhotoEvidence = false
-    @State private var hasAccessCode = false
+    @State private var showingAccessCode = false
+    @State private var codeRejected = false
     var body: some View {
         let hasEvidence = !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasPhotoEvidence
         return Form {
             Section { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue) }
             Section { VoiceTextInput(title: "Work Completed", placeholder: "Describe what you completed…", text: $job.roughNote) }
             Section {
-                Button { Task { await improve() } } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }
-                    .disabled(busy || !AIService.isConfigured || !hasAccessCode || !hasEvidence)
+                Button { requestImprovement() } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }
+                    .disabled(busy || !AIService.isConfigured || !hasEvidence)
                 if !hasEvidence {
                     Text("Add a work note or a Before/After photo to use AI.").font(.caption).foregroundStyle(.secondary)
                 } else if !AIService.isConfigured {
                     Text("AI writing will be available after setup.").font(.caption).foregroundStyle(.secondary)
-                } else if !hasAccessCode {
-                    NavigationLink("Enter judging code") { AIAccessCodeView() }.font(.subheadline)
                 }
             }
             if !message.isEmpty { Section { Text(message).font(.caption).foregroundStyle(.secondary) } }
@@ -159,7 +158,7 @@ struct NotesView: View {
                 Section("AI-assisted draft · review and edit") {
                     TextEditor(text: $draft).frame(minHeight: 120)
                     HStack {
-                        Button("Try Again") { Task { await improve() } }.disabled(busy)
+                        Button("Try Again") { requestImprovement() }.disabled(busy)
                         Spacer()
                         Button("Use This Version") { job.professionalNote = draft; draft = ""; message = "Reviewed wording saved." }.buttonStyle(.borderedProminent)
                     }
@@ -167,16 +166,39 @@ struct NotesView: View {
             }
             if !job.professionalNote.isEmpty { Section("Approved wording") { TextEditor(text: $job.professionalNote).frame(minHeight: 110) } }
         }.navigationTitle("Work Details")
-            .onAppear { hasPhotoEvidence = AIService.hasReadablePhoto(job: job); hasAccessCode = AIAccessCodeStore.load() != nil }
+            .onAppear { hasPhotoEvidence = AIService.hasReadablePhoto(job: job) }
             .onChange(of: job.photosData) { _, _ in hasPhotoEvidence = AIService.hasReadablePhoto(job: job) }
             .onChange(of: job.issue) { _, _ in job.technicianConfirmed = false }
             .onChange(of: job.roughNote) { _, _ in job.technicianConfirmed = false }
             .onChange(of: job.professionalNote) { _, _ in job.technicianConfirmed = false }
+            .sheet(isPresented: $showingAccessCode) {
+                NavigationStack {
+                    AIAccessCodeView(warning: codeRejected ? "That code was not accepted. Check it and try again." : nil, onSaved: {
+                        showingAccessCode = false
+                        codeRejected = false
+                        message = ""
+                        Task { await improve() }
+                    })
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { showingAccessCode = false } } }
+                }
+            }
+    }
+    private func requestImprovement() {
+        if AIAccessCodeStore.load() == nil { codeRejected = false; showingAccessCode = true }
+        else { Task { await improve() } }
     }
     private func improve() async {
         busy = true; defer { busy = false }
         do { draft = try await AIService.improve(job: job).professionalSummary; message = "Review and edit this AI-assisted draft. It has not verified the work." }
-        catch { message = (error as? AIService.Failure)?.localizedDescription ?? AIService.Failure.unavailable.localizedDescription }
+        catch {
+            if let failure = error as? AIService.Failure, case .accessCodeRequired = failure {
+                message = "That code was not accepted. Check it and try again."
+                codeRejected = true
+                showingAccessCode = true
+            } else {
+                message = (error as? AIService.Failure)?.localizedDescription ?? AIService.Failure.unavailable.localizedDescription
+            }
+        }
     }
 }
 
