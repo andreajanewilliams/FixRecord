@@ -295,6 +295,19 @@ final class FixRecordTests: XCTestCase {
         let draft = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
         XCTAssertFalse((draft.string ?? "").contains("COMPLETED BY"))
     }
+    func testCompletingJobDoesNotConfirmReport() throws {
+        let job = Job(number: "FR-TEST-001", title: "Sink repair", clientName: "Client", siteAddress: "", category: "Maintenance", issue: "Leaking pipe", technician: "Technician", businessName: "Business", currencyCode: "USD", taxRate: "0")
+        job.roughNote = "Replaced the connector."
+        job.status = .completed
+
+        XCTAssertFalse(job.technicianConfirmed)
+        let report = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
+        XCTAssertFalse((report.string ?? "").contains("COMPLETED BY"))
+
+        job.technicianConfirmed = true
+        let confirmed = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil)))
+        XCTAssertTrue((confirmed.string ?? "").contains("COMPLETED BY"))
+    }
     func testPhotoFreeWorkReportUsesTextLayout() throws {
         let job = SampleJob.make()
         job.photos = []

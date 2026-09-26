@@ -454,6 +454,7 @@ struct JobPhotoStep: View {
 struct JobDetailView: View {
     @Bindable var job: Job
     @State private var editing = false
+    @State private var showingConfirmationReview = false
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -478,10 +479,7 @@ struct JobDetailView: View {
                         Spacer(minLength: 8)
                         Button {
                             if job.status == .completed { job.status = .inProgress }
-                            else {
-                                job.status = .completed
-                                job.technicianConfirmed = true
-                            }
+                            else { job.status = .completed }
                         } label: {
                             Text(job.status == .completed ? "Reopen" : "Complete")
                                 .font(.subheadline.weight(.semibold))
@@ -493,9 +491,9 @@ struct JobDetailView: View {
                     if job.status == .completed && !job.technicianConfirmed {
                         Divider()
                         HStack(spacing: 10) {
-                            Text("Report needs confirmation").font(.caption).foregroundStyle(.secondary)
+                            Text("Review the record before confirming it for the report.").font(.caption).foregroundStyle(.secondary)
                             Spacer(minLength: 4)
-                            Button("Confirm") { job.technicianConfirmed = true }
+                            Button("Review") { showingConfirmationReview = true }
                                 .font(.caption.weight(.semibold)).foregroundStyle(Brand.blue)
                         }
                     }
@@ -510,6 +508,37 @@ struct JobDetailView: View {
                 NavigationLink { ExportView(job: job) } label: { feature("Preview & Export", subtitle: "Work report, invoice or client pack", icon: "doc.richtext") }
             }.padding()
         }.background(Brand.background).navigationTitle("Job Details").navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingConfirmationReview) {
+                NavigationStack {
+                    Form {
+                        Section("Job") {
+                            LabeledContent("Title", value: job.title)
+                            LabeledContent("Client", value: job.clientName)
+                            LabeledContent("Technician", value: job.technician.isEmpty ? "Not added" : job.technician)
+                        }
+                        Section("Reported issue") { Text(job.issue.isEmpty ? "Not added" : job.issue) }
+                        Section("Work completed") { Text(job.summary.isEmpty ? "Not added" : job.summary) }
+                        Section("Supporting details") {
+                            LabeledContent("Before photos", value: "\(job.photos.filter { $0.kind == .before }.count)")
+                            LabeledContent("After photos", value: "\(job.photos.filter { $0.kind == .after }.count)")
+                            LabeledContent("Items", value: "\(job.items.count)")
+                        }
+                        Section {
+                            Text("Confirm that this record reflects the work you entered. FixRecord does not verify the repair or its safety.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    .navigationTitle("Review record")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showingConfirmationReview = false } } }
+                    .safeAreaInset(edge: .bottom) {
+                        PrimaryButton(title: "Confirm record", icon: "checkmark.seal") {
+                            job.technicianConfirmed = true
+                            showingConfirmationReview = false
+                        }.padding(16).background(Brand.background)
+                    }
+                }
+            }
             .toolbar { Button("Edit") { editing = true } }
             .sheet(isPresented: $editing) { NavigationStack { JobEditView(job: job) } }
     }
