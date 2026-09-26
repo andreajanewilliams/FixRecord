@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import sharp from 'sharp';
 
 type Input = { installId: string; jobId: string; revenueCatAppUserId: string; jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
@@ -8,6 +8,20 @@ const defaultModel = 'gpt-6-luna';
 const maxImageBytes = 900_000;
 const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; monthlyCount: number }>();
 const ipMemory = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
+
+function accessIdentity(req: VercelRequest): string | undefined {
+  const supplied = req.headers['x-fixrecord-access-code'];
+  const code = typeof supplied === 'string' ? supplied.trim() : '';
+  if (code.length < 20 || code.length > 128) return undefined;
+  const configured = process.env.AI_ACCESS_CODES?.split(',').map(value => value.trim()).filter(Boolean) ?? [];
+  const candidate = createHash('sha256').update(code).digest();
+  let matched = false;
+  for (const allowed of configured) {
+    const digest = createHash('sha256').update(allowed).digest();
+    matched = timingSafeEqual(candidate, digest) || matched;
+  }
+  return matched ? candidate.toString('hex') : undefined;
+}
 
 function validImage(value: unknown): value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 1_200_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
@@ -72,7 +86,7 @@ async function allowedIP(ipKey: string): Promise<boolean> {
   return state.minuteCount <= 30 && state.dayCount <= 100;
 }
 
-async function allowed(key: string, installId: string, appUserId: string): Promise<boolean> {
+async function allowed(key: string, accessId: string, appUserId: string): Promise<boolean> {
   const now = Date.now();
   const minute = Math.floor(now / 60000), day = Math.floor(now / 86400000);
   const month = new Date(now).getUTCFullYear() * 12 + new Date(now).getUTCMonth();
@@ -92,16 +106,16 @@ async function allowed(key: string, installId: string, appUserId: string): Promi
     const global = await redis([['INCR', `fixrecord:global:${day}`], ['EXPIRE', `fixrecord:global:${day}`, 172800]]);
     if ((global?.[0]?.result ?? 1001) > 1000) return false;
     const monthlyLimit = await isPro(appUserId) ? 30 : 3;
-    const usage = await redis([['INCR', `fixrecord:requests:${month}:${installId}`], ['EXPIRE', `fixrecord:requests:${month}:${installId}`, 2678400]]);
+    const usage = await redis([['INCR', `fixrecord:requests:${month}:${accessId}`], ['EXPIRE', `fixrecord:requests:${month}:${accessId}`, 2678400]]);
     return (usage[0]?.result ?? monthlyLimit + 1) <= monthlyLimit;
   }
   if (process.env.VERCEL) return false;
-  const state = memory.get(installId) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
+  const state = memory.get(accessId) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
   if (state.minute !== minute) { state.minute = minute; state.minuteCount = 0; }
   if (state.day !== day) { state.day = day; state.dayCount = 0; }
   if (state.month !== month) { state.month = month; state.monthlyCount = 0; }
   state.minuteCount++; state.dayCount++; state.monthlyCount++;
-  memory.set(installId, state);
+  memory.set(accessId, state);
   if (state.minuteCount > 6 || state.dayCount > 100) return false;
   return state.monthlyCount <= (await isPro(appUserId) ? 30 : 3);
 }
@@ -115,6 +129,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const ipKey = createHash('sha256').update(ip).digest('hex');
   try { if (!(await allowedIP(ipKey))) return res.status(429).json({ error: 'AI limit reached' }); }
   catch { return res.status(503).json({ error: 'Usage service unavailable' }); }
+  const accessId = accessIdentity(req);
+  if (!accessId) return res.status(401).json({ error: 'AI access code required' });
   if (!valid(req.body)) return res.status(400).json({ error: 'Invalid job facts' });
   const input = req.body;
   let beforeImage: string | undefined, afterImage: string | undefined;
@@ -122,8 +138,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     beforeImage = await normaliseImage(input.beforeImage);
     afterImage = await normaliseImage(input.afterImage);
   } catch { return res.status(400).json({ error: 'Invalid job photo' }); }
-  const key = `${input.installId}:${ipKey}`;
-  try { if (!(await allowed(key, input.installId, input.revenueCatAppUserId))) return res.status(429).json({ error: 'AI limit reached' }); }
+  const key = `${accessId}:${ipKey}`;
+  try { if (!(await allowed(key, accessId, input.revenueCatAppUserId))) return res.status(429).json({ error: 'AI limit reached' }); }
   catch { return res.status(503).json({ error: 'Usage service unavailable' }); }
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 16000);
   try {

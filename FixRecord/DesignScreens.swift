@@ -265,11 +265,38 @@ struct SettingsView: View {
                 NavigationLink { DataManagementView() } label: { Label("Data Management", systemImage: "externaldrive") }
             }
             Section {
+                NavigationLink { AIAccessCodeView() } label: { Label("AI Access Code", systemImage: "key") }
                 NavigationLink { UpgradeView() } label: { Label("Upgrade to Pro / Manage Plan", systemImage: "star") }
                 NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
             }
         }.navigationTitle("Settings")
             .sheet(item: $editingProfile) { value in NavigationStack { BusinessProfileView(profile: value) } }
+    }
+}
+
+struct AIAccessCodeView: View {
+    @State private var code = ""
+    @State private var saved = false
+    @State private var message = ""
+    var body: some View {
+        Form {
+            Section {
+                SecureField("Access code", text: $code)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Save Code") {
+                    saved = AIAccessCodeStore.save(code)
+                    message = saved ? "Code saved on this device." : "Enter the full access code supplied for the demo."
+                    if saved { code = "" }
+                }.disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if saved { Button("Remove Code", role: .destructive) { AIAccessCodeStore.remove(); saved = false; message = "Code removed." } }
+            } footer: {
+                Text("Your code lets the demo server apply your monthly AI allowance. It is stored on this device and is not included in exported documents.")
+            }
+            if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
+        }
+        .navigationTitle("AI Access Code")
+        .onAppear { saved = AIAccessCodeStore.load() != nil }
     }
 }
 

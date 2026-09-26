@@ -14,6 +14,7 @@ before(() => {
   delete process.env.REVENUECAT_SECRET_API_KEY;
   delete process.env.OPENAI_MODEL;
   process.env.OPENAI_API_KEY = 'test-only-key';
+  process.env.AI_ACCESS_CODES = 'test-code-12345678901234567890';
 });
 
 after(() => {
@@ -23,7 +24,7 @@ after(() => {
 
 function request(overrides = {}) {
   return {
-    method: 'POST', headers: {}, socket: { remoteAddress: '127.0.0.1' },
+    method: 'POST', headers: { 'x-fixrecord-access-code': 'test-code-12345678901234567890' }, socket: { remoteAddress: '127.0.0.1' },
     body: {
       installId: crypto.randomUUID(), jobId: crypto.randomUUID(),
       jobTitle: 'Kitchen Sink Repair', issueDescription: 'A leaking connection',
@@ -39,6 +40,12 @@ function response() {
     status(code) { this.statusCode = code; return this; },
     json(body) { this.body = body; return this; }
   };
+}
+
+function freshAccessCode() {
+  const code = `test-${crypto.randomUUID()}`;
+  process.env.AI_ACCESS_CODES += `,${code}`;
+  return code;
 }
 
 test('Luna request includes labelled photos and keeps job identifiers out of model input', async () => {
@@ -109,6 +116,7 @@ test('returns a setup error without an API key and rejects incomplete model outp
 
 test('Free allows three AI requests per month, including retries on one job', async () => {
   const req = request({ roughNotes: 'Replaced the washer.' });
+  req.headers['x-fixrecord-access-code'] = freshAccessCode();
   req.body.revenueCatAppUserId = req.body.installId;
   req.socket.remoteAddress = '192.0.2.78';
   let modelCalls = 0;
@@ -124,12 +132,46 @@ test('Free allows three AI requests per month, including retries on one job', as
   assert.equal(modelCalls, 3);
 });
 
+test('one access code cannot reset its monthly limit by changing installation IDs', async () => {
+  const code = freshAccessCode();
+  let modelCalls = 0;
+  globalThis.fetch = async () => {
+    modelCalls++;
+    return new Response(JSON.stringify({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ reportedIssue: '', workCompleted: '', completionNotes: '', professionalSummary: 'Washer replaced.' }) }] }] }), { status: 200 });
+  };
+  for (let count = 1; count <= 4; count++) {
+    const req = request({ roughNotes: 'Replaced the washer.' });
+    req.headers['x-fixrecord-access-code'] = code;
+    req.body.revenueCatAppUserId = req.body.installId;
+    req.socket.remoteAddress = '192.0.2.81';
+    const res = response();
+    await handler(req, res);
+    assert.equal(res.statusCode, count <= 3 ? 200 : 429);
+  }
+  assert.equal(modelCalls, 3);
+});
+
+test('missing or unknown access codes never call OpenAI', async () => {
+  globalThis.fetch = async () => { throw new Error('unauthorised request reached a service'); };
+  for (const code of [undefined, 'unknown-code-12345678901234567890']) {
+    const req = request({ roughNotes: 'Replaced the washer.' });
+    req.body.revenueCatAppUserId = req.body.installId;
+    req.socket.remoteAddress = '192.0.2.82';
+    if (code === undefined) delete req.headers['x-fixrecord-access-code'];
+    else req.headers['x-fixrecord-access-code'] = code;
+    const res = response();
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+  }
+});
+
 test('hosted Redis quota blocks a fourth Free request before OpenAI is called', async () => {
   process.env.VERCEL = '1';
   process.env.UPSTASH_REDIS_REST_URL = 'https://example.upstash.io';
   process.env.UPSTASH_REDIS_REST_TOKEN = 'test-only-token';
   const counters = new Map();
   const req = request({ roughNotes: 'Replaced the washer.' });
+  req.headers['x-fixrecord-access-code'] = freshAccessCode();
   req.headers['x-vercel-forwarded-for'] = '192.0.2.80';
   req.body.revenueCatAppUserId = req.body.installId;
   let modelCalls = 0;
@@ -169,6 +211,7 @@ test('verified Pro allows thirty AI requests per month', async () => {
   let minute = 0;
   Date.now = () => start + minute * 60_000;
   const req = request({ roughNotes: 'Replaced the washer.' });
+  req.headers['x-fixrecord-access-code'] = freshAccessCode();
   req.body.revenueCatAppUserId = req.body.installId;
   req.socket.remoteAddress = '192.0.2.79';
   process.env.REVENUECAT_SECRET_API_KEY = 'test-only-revenuecat-key';

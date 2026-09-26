@@ -1,6 +1,34 @@
 import SwiftUI
 import RevenueCat
 import UIKit
+import Security
+
+enum AIAccessCodeStore {
+    private static let service = "com.andreajanewilliams.fixrecord.ai"
+    private static let account = "accessCode"
+    private static var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+    static func load() -> String? {
+        var result: CFTypeRef?
+        var search = query
+        search[kSecReturnData as String] = true
+        search[kSecMatchLimit as String] = kSecMatchLimitOne
+        guard SecItemCopyMatching(search as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+    static func save(_ code: String) -> Bool {
+        let value = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (20...128).contains(value.count), let data = value.data(using: .utf8) else { return false }
+        SecItemDelete(query as CFDictionary)
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+    }
+    static func remove() { SecItemDelete(query as CFDictionary) }
+}
 
 struct AIResponse: Codable {
     let reportedIssue: String
@@ -11,10 +39,11 @@ struct AIResponse: Codable {
 
 enum AIService {
     enum Failure: LocalizedError {
-        case notConfigured, insufficientDetail, limitReached, unavailable, invalidResponse
+        case notConfigured, accessCodeRequired, insufficientDetail, limitReached, unavailable, invalidResponse
         var errorDescription: String? {
             switch self {
             case .notConfigured: return "AI writing is not set up yet. Your note is still available."
+            case .accessCodeRequired: return "Enter your AI access code in Settings to use AI writing."
             case .insufficientDetail: return "Add a work note or a Before/After photo first."
             case .limitReached: return "AI limit reached. You can keep editing your note or try again later."
             case .unavailable: return "AI is unavailable right now. Your note is still available."
@@ -75,6 +104,7 @@ enum AIService {
     }
     static func improve(job: Job) async throws -> AIResponse {
         guard let url = endpointURL else { throw Failure.notConfigured }
+        guard let accessCode = AIAccessCodeStore.load() else { throw Failure.accessCodeRequired }
         let photos = selectedPhotos(for: job)
         let beforeImage = encodedPhoto(photos.before)
         let afterImage = encodedPhoto(photos.after)
@@ -82,6 +112,7 @@ enum AIService {
                 || beforeImage != nil || afterImage != nil else { throw Failure.insufficientDetail }
         var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 25
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(accessCode, forHTTPHeaderField: "X-FixRecord-Access-Code")
         let installID: String = {
             if let id = UserDefaults.standard.string(forKey: "installID") { return id }
             let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "installID"); return id
@@ -92,6 +123,7 @@ enum AIService {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw Failure.unavailable }
+        if http.statusCode == 401 { throw Failure.accessCodeRequired }
         if http.statusCode == 429 { throw Failure.limitReached }
         guard (200..<300).contains(http.statusCode) else { throw Failure.unavailable }
         guard let result = try? JSONDecoder().decode(AIResponse.self, from: data),
@@ -106,6 +138,7 @@ struct NotesView: View {
     @State private var message = ""
     @State private var busy = false
     @State private var hasPhotoEvidence = false
+    @State private var hasAccessCode = false
     var body: some View {
         let hasEvidence = !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasPhotoEvidence
         return Form {
@@ -113,11 +146,13 @@ struct NotesView: View {
             Section { VoiceTextInput(title: "Work Completed", placeholder: "Describe what you completed…", text: $job.roughNote) }
             Section {
                 Button { Task { await improve() } } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }
-                    .disabled(busy || !AIService.isConfigured || !hasEvidence)
+                    .disabled(busy || !AIService.isConfigured || !hasAccessCode || !hasEvidence)
                 if !hasEvidence {
                     Text("Add a work note or a Before/After photo to use AI.").font(.caption).foregroundStyle(.secondary)
                 } else if !AIService.isConfigured {
                     Text("AI writing will be available after setup.").font(.caption).foregroundStyle(.secondary)
+                } else if !hasAccessCode {
+                    Text("Enter your AI access code in Settings to use AI writing.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if !message.isEmpty { Section { Text(message).font(.caption).foregroundStyle(.secondary) } }
@@ -133,7 +168,7 @@ struct NotesView: View {
             }
             if !job.professionalNote.isEmpty { Section("Approved wording") { TextEditor(text: $job.professionalNote).frame(minHeight: 110) } }
         }.navigationTitle("Work Details")
-            .onAppear { hasPhotoEvidence = AIService.hasReadablePhoto(job: job) }
+            .onAppear { hasPhotoEvidence = AIService.hasReadablePhoto(job: job); hasAccessCode = AIAccessCodeStore.load() != nil }
             .onChange(of: job.photosData) { _, _ in hasPhotoEvidence = AIService.hasReadablePhoto(job: job) }
             .onChange(of: job.issue) { _, _ in job.technicianConfirmed = false }
             .onChange(of: job.roughNote) { _, _ in job.technicianConfirmed = false }
