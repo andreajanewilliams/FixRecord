@@ -90,8 +90,8 @@ final class FixRecordTests: XCTestCase {
         completed.status = .completed
         let jobs = [draft, completed]
 
-        XCTAssertEqual(JobFilter.visible(jobs, status: .all, search: "  oak  ").map(\.id), [draft.id])
-        XCTAssertEqual(JobFilter.visible(jobs, status: .all, search: "fr-2042").map(\.id), [draft.id])
+        XCTAssertEqual(JobFilter.visible(jobs, status: .inProgress, search: "  oak  ").map(\.id), [draft.id])
+        XCTAssertEqual(JobFilter.visible(jobs, status: .inProgress, search: "fr-2042").map(\.id), [draft.id])
         XCTAssertTrue(JobFilter.visible(jobs, status: .completed, search: "Sarah").isEmpty)
         XCTAssertEqual(JobFilter.visible(jobs, status: .completed, search: "").map(\.id), [completed.id])
     }

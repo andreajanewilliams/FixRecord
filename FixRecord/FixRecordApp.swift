@@ -45,7 +45,7 @@ struct RootView: View {
     @State private var pendingJob: Job?
     @State private var exampleError: String?
     @State private var selection = 0
-    @State private var homeFilter: JobFilter = .all
+    @State private var homeFilter: JobFilter = .inProgress
     var profile: BusinessProfile? { profiles.first }
     var body: some View {
         TabView(selection: $selection) {
@@ -58,7 +58,7 @@ struct RootView: View {
         }
         .fullScreenCover(isPresented: $newJob, onDismiss: {
             if let pendingJob { selectedJob = pendingJob; self.pendingJob = nil }
-        }) { NavigationStack { CreateJobView(profile: profile) { job in pendingJob = job; newJob = false } } }
+        }) { NavigationStack { CreateJobView(profile: profile) { job in homeFilter = .inProgress; pendingJob = job; newJob = false } } }
         .fullScreenCover(isPresented: Binding(get: { !didCompleteOnboarding && !ProcessInfo.processInfo.arguments.contains("-skip-onboarding") }, set: { if !$0 { didCompleteOnboarding = true } })) {
             OnboardingView { choice in
                 switch choice {
@@ -73,7 +73,7 @@ struct RootView: View {
                         }
                     }
                     selectedJob = nil
-                    homeFilter = .all
+                    homeFilter = .completed
                     selection = 0
                     didCompleteOnboarding = true
                 case .createJob:
@@ -134,8 +134,8 @@ struct HomeView: View {
                     ForEach(JobFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented)
                 if visibleJobs.isEmpty {
-                    ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : "No matching jobs", systemImage: searchText.isEmpty ? "doc.text.image" : "magnifyingglass", description: Text(jobs.isEmpty ? "Create a job or explore an example." : "Try a different search or status."))
-                    if jobs.isEmpty { Button("Add Example Job") { context.insert(SampleJob.make()) }.buttonStyle(.bordered) }
+                    ContentUnavailableView(jobs.isEmpty ? "No jobs yet" : searchText.isEmpty ? (filter == .inProgress ? "No jobs in progress" : "No completed jobs") : "No matching jobs", systemImage: searchText.isEmpty ? "doc.text.image" : "magnifyingglass", description: Text(jobs.isEmpty ? "Create a job or explore an example." : searchText.isEmpty ? "Jobs will appear here when their status changes." : "Try a different search or status."))
+                    if jobs.isEmpty { Button("Add Example Job") { context.insert(SampleJob.make()); filter = .completed }.buttonStyle(.bordered) }
                 } else {
                     LazyVStack(spacing: 8) { ForEach(visibleJobs) { job in
                         Button { selectedJob = job } label: { JobRow(job: job) }.buttonStyle(.plain)
@@ -162,7 +162,7 @@ struct HomeView: View {
         context.insert(copy)
         do {
             try context.save()
-            filter = .all
+            filter = .inProgress
             searchText = ""
             selectedJob = copy
         } catch {
@@ -173,13 +173,13 @@ struct HomeView: View {
 }
 
 enum JobFilter: String, CaseIterable {
-    case all = "All", inProgress = "In Progress", completed = "Completed"
-    var status: JobStatus? { switch self { case .all: nil; case .inProgress: .inProgress; case .completed: .completed } }
+    case inProgress = "In Progress", completed = "Completed"
+    var status: JobStatus { switch self { case .inProgress: .inProgress; case .completed: .completed } }
 
     static func visible(_ jobs: [Job], status: JobFilter, search: String) -> [Job] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return jobs.filter { job in
-            guard status == .all || job.status == status.status else { return false }
+            guard job.status == status.status else { return false }
             guard !query.isEmpty else { return true }
             return [job.title, job.clientName, job.siteAddress, job.category, job.number]
                 .contains { $0.localizedStandardContains(query) }
