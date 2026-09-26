@@ -205,6 +205,7 @@ struct CreateJobView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \Job.createdAt, order: .reverse) private var jobs: [Job]
+    @AppStorage("defaultCurrencyCode") private var defaultCurrencyCode = ""
     let profile: BusinessProfile?
     let onCreate: (Job) -> Void
     @State private var defaults = JobDefaultsService.shared
@@ -223,6 +224,7 @@ struct CreateJobView: View {
     @State private var saveError = ""
     @State private var didPrefill = false
     @FocusState private var technicianFocused: Bool
+    private var startingCurrencyCode: String { defaultCurrencyCode.isEmpty ? (profile?.currencyCode ?? "USD") : defaultCurrencyCode }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -234,7 +236,7 @@ struct CreateJobView: View {
                                 chosenPreset = nil
                                 technician = defaults.technician(for: profile)
                                 category = defaults.category()
-                                currencyCode = profile?.currencyCode ?? "USD"
+                                currencyCode = startingCurrencyCode
                             }
                             ForEach(presets.presets) { preset in
                                 Button(preset.name) {
@@ -311,7 +313,7 @@ struct CreateJobView: View {
                 defaults.bootstrap(from: jobs)
                 technician = defaults.technician(for: profile)
                 category = defaults.category()
-                currencyCode = profile?.currencyCode ?? "USD"
+                currencyCode = startingCurrencyCode
                 if let preset = presets.defaultPreset {
                     chosenPreset = preset
                     if !preset.technician.isEmpty { technician = preset.technician }

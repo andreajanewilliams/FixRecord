@@ -333,6 +333,8 @@ struct AIAccessCodeView: View {
 }
 
 struct JobDefaultsView: View {
+    @Query private var profiles: [BusinessProfile]
+    @AppStorage("defaultCurrencyCode") private var defaultCurrencyCode = ""
     @State private var defaults = JobDefaultsService.shared
     var body: some View {
         List {
@@ -348,6 +350,12 @@ struct JobDefaultsView: View {
             Section("Categories") {
                 NavigationLink { ManageCustomCategoriesView() } label: { Text("Manage Custom Categories") }
             }
+            Section {
+                CurrencyPickerRow(currencyCode: Binding(
+                    get: { defaultCurrencyCode.isEmpty ? (profiles.first?.currencyCode ?? "USD") : defaultCurrencyCode },
+                    set: { defaultCurrencyCode = $0 }
+                ), title: "Default currency")
+            } footer: { Text("Used for new jobs without a preset and new presets. Each job or preset can still have its own currency.") }
         }.navigationTitle("Job Defaults")
     }
     private func settingRow(_ title: String, value: String) -> some View {
@@ -514,18 +522,19 @@ enum CurrencyCatalog {
 
 struct CurrencyPickerRow: View {
     @Binding var currencyCode: String
+    var title = "Currency"
     @State private var showingCurrencies = false
 
     var body: some View {
         Button { showingCurrencies = true } label: {
             HStack {
-                Text("Currency").foregroundStyle(.primary)
+                Text(title).foregroundStyle(.primary)
                 Spacer()
                 Text(currencyCode.isEmpty ? "USD" : currencyCode.uppercased()).foregroundStyle(Brand.blue)
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .accessibilityLabel("Currency, \(currencyCode). Choose currency")
+        .accessibilityLabel("\(title), \(currencyCode). Choose currency")
         .sheet(isPresented: $showingCurrencies) {
             NavigationStack { CurrencySelectionView(currencyCode: $currencyCode) }
         }
@@ -672,7 +681,9 @@ struct SavedPreset: Codable, Identifiable, Equatable {
 
 struct PresetsView: View {
     let profile: BusinessProfile?
+    @AppStorage("defaultCurrencyCode") private var defaultCurrencyCode = ""
     @State private var store = PresetStore.shared
+    @StateObject private var entitlements = EntitlementService.shared
     @State private var editing: SavedPreset?
 
     var body: some View {
@@ -689,7 +700,7 @@ struct PresetsView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(preset.name).foregroundStyle(Brand.navy)
-                                Text(preset.business.businessName.isEmpty ? preset.options.template.rawValue : "\(preset.business.businessName) · \(preset.options.template.rawValue)")
+                                Text(preset.business.businessName.isEmpty ? layoutDescription(for: preset) : "\(preset.business.businessName) · \(layoutDescription(for: preset))")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -703,21 +714,34 @@ struct PresetsView: View {
             } header: { Text("Presets") }
               footer: { Text("Swipe to delete. Jobs already using a preset keep their saved settings.") }
             Section {
-                Button { var preset = SavedPreset.custom(profile: profile); preset.name = ""; editing = preset } label: {
+                Button {
+                    var preset = SavedPreset.custom(profile: profile)
+                    preset.name = ""
+                    if !defaultCurrencyCode.isEmpty { preset.business.currencyCode = defaultCurrencyCode }
+                    editing = preset
+                } label: {
                     Label("Create Preset", systemImage: "plus.circle.fill")
                 }
             }
         }.navigationTitle("Saved Presets")
             .sheet(item: $editing) { preset in NavigationStack { PresetEditorView(preset: preset) { store.save($0) } } }
+            .task { await entitlements.refresh() }
+    }
+
+    private func layoutDescription(for preset: SavedPreset) -> String {
+        if !entitlements.isPro && preset.options.template != .modern { return "Modern on Free" }
+        return preset.options.template.rawValue
     }
 }
 
 struct PresetEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var preset: SavedPreset
+    @State private var defaults = JobDefaultsService.shared
     @StateObject private var entitlements = EntitlementService.shared
     @State private var selectedLogo: PhotosPickerItem?
     @State private var showingUpgrade = false
+    @State private var showingCategory = false
     @State private var loadingLogo = false
     @State private var logoError = ""
 
@@ -740,7 +764,7 @@ struct PresetEditorView: View {
                 if entitlements.isPro {
                     PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images).disabled(loadingLogo)
                     if !preset.business.logoFilename.isEmpty { Button("Remove logo") { preset.business.logoFilename = "" } }
-                } else { Button("Choose logo · Pro") { showingUpgrade = true } }
+                } else { lockedOption("Choose business logo", detail: "Available with Pro") }
                 if loadingLogo { ProgressView("Loading logo…") }
                 if !logoError.isEmpty { Text(logoError).font(.caption).foregroundStyle(.red) }
                 TextField("Business name", text: $preset.business.businessName)
@@ -755,21 +779,57 @@ struct PresetEditorView: View {
                 TextField("Invoice prefix", text: $preset.business.invoicePrefix)
             }
             if editName {
-                Section("Job defaults") {
-                    TextField("Technician (optional)", text: $preset.technician)
-                    TextField("Category (optional)", text: $preset.category)
-                }
+                Section {
+                    HStack {
+                        TextField("Technician (optional)", text: $preset.technician)
+                        Menu {
+                            Button("Use job default") { preset.technician = "" }
+                            if !defaults.state.recentTechnicians.isEmpty {
+                                Section("Recent technicians") {
+                                    ForEach(defaults.state.recentTechnicians, id: \.self) { name in
+                                        Button(name) { preset.technician = name }
+                                    }
+                                }
+                            }
+                        } label: { Image(systemName: "chevron.down.circle").foregroundStyle(Brand.blue) }
+                            .accessibilityLabel("Choose technician")
+                    }
+                    Button { showingCategory = true } label: {
+                        HStack {
+                            Text("Category").foregroundStyle(.primary)
+                            Spacer()
+                            Text(preset.category.isEmpty ? "Use job default" : preset.category).foregroundStyle(Brand.blue)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: { Text("Job defaults") }
+                  footer: { Text("Leave either field empty to use your usual job defaults.") }
             }
-            Section("Document layout") {
-                Picker("Layout", selection: $preset.options.template) {
-                    ForEach(DocumentTemplate.allCases, id: \.self) { layout in Text(layout.rawValue).tag(layout) }
-                }.onChange(of: preset.options.template) { _, layout in
-                    if !entitlements.isPro && layout != .modern { preset.options.template = .modern; showingUpgrade = true }
+            Section {
+                ForEach(DocumentTemplate.allCases, id: \.self) { layout in
+                    Button {
+                        if entitlements.isPro || layout == .modern { preset.options.template = layout }
+                        else { showingUpgrade = true }
+                    } label: {
+                        HStack {
+                            Text(layout.rawValue).foregroundStyle(.primary)
+                            Spacer()
+                            if !entitlements.isPro && layout != .modern {
+                                Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
+                                proBadge
+                            } else if (entitlements.isPro ? preset.options.template : .modern) == layout {
+                                Image(systemName: "checkmark").foregroundStyle(Brand.blue)
+                            }
+                        }
+                    }
                 }
-                Toggle("Show business logo", isOn: $preset.options.showLogo).disabled(!entitlements.isPro)
+                if entitlements.isPro { Toggle("Show business logo", isOn: $preset.options.showLogo) }
+                else { lockedOption("Show business logo", detail: "Off on Free") }
                 Toggle("Show business details", isOn: $preset.options.showBusinessDetails)
-                Toggle("Show FixRecord branding", isOn: $preset.options.showFixRecordBranding).disabled(!entitlements.isPro)
-            }
+                if entitlements.isPro { Toggle("Show FixRecord branding", isOn: $preset.options.showFixRecordBranding) }
+                else { lockedOption("Hide FixRecord branding", detail: "Branding stays on with Free") }
+            } header: { Text("Document layout") }
+              footer: { Text("Modern and the unmarked settings are free. Pro unlocks other layouts, logos and branding removal.") }
             Section("Work report") {
                 Toggle("Show before & after photos", isOn: $preset.includePhotos)
                 Toggle("Show reported issue", isOn: $preset.options.showReportedIssue)
@@ -795,6 +855,7 @@ struct PresetEditorView: View {
                 }
             }
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
+            .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: preset.category) { preset.category = $0 } }
             .task { await entitlements.refresh() }
             .onChange(of: selectedLogo) { _, item in
                 guard let item else { return }
@@ -815,6 +876,26 @@ struct PresetEditorView: View {
                     }
                 }
             }
+    }
+
+    private var proBadge: some View {
+        Text("PRO").font(.caption2.bold()).foregroundStyle(Brand.blue)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(Brand.pale, in: Capsule())
+    }
+
+    private func lockedOption(_ title: String, detail: String) -> some View {
+        Button { showingUpgrade = true } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
+                proBadge
+            }
+        }
     }
 }
 
