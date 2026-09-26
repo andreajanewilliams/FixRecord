@@ -6,7 +6,7 @@ type Input = { installId: string; jobId: string; revenueCatAppUserId: string; jo
 const required = ['reportedIssue', 'workCompleted', 'completionNotes', 'professionalSummary'] as const;
 const defaultModel = 'gpt-6-luna';
 const maxImageBytes = 900_000;
-const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; jobs: Map<string, number> }>();
+const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; monthlyCount: number }>();
 const ipMemory = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
 
 function validImage(value: unknown): value is string {
@@ -72,7 +72,7 @@ async function allowedIP(ipKey: string): Promise<boolean> {
   return state.minuteCount <= 30 && state.dayCount <= 100;
 }
 
-async function allowed(key: string, installId: string, jobId: string, appUserId: string): Promise<boolean> {
+async function allowed(key: string, installId: string, appUserId: string): Promise<boolean> {
   const now = Date.now();
   const minute = Math.floor(now / 60000), day = Math.floor(now / 86400000);
   const month = new Date(now).getUTCFullYear() * 12 + new Date(now).getUTCMonth();
@@ -91,28 +91,19 @@ async function allowed(key: string, installId: string, jobId: string, appUserId:
     }
     const global = await redis([['INCR', `fixrecord:global:${day}`], ['EXPIRE', `fixrecord:global:${day}`, 172800]]);
     if ((global?.[0]?.result ?? 1001) > 1000) return false;
-    const monthlyJobLimit = await isPro(appUserId) ? 100 : 10;
-    const jobsKey = `fixrecord:jobs:${month}:${installId}`;
-    const countKey = `fixrecord:rewrites:${month}:${installId}:${jobId}`;
-    const state = await redis([['SISMEMBER', jobsKey, jobId], ['SCARD', jobsKey]]);
-    if ((state[0]?.result ?? 0) === 0 && (state[1]?.result ?? monthlyJobLimit) >= monthlyJobLimit) return false;
-    const usage = await redis([['SADD', jobsKey, jobId], ['EXPIRE', jobsKey, 2678400], ['INCR', countKey], ['EXPIRE', countKey, 2678400]]);
-    if ((usage[2]?.result ?? 6) > 5) return false;
-    return true;
+    const monthlyLimit = await isPro(appUserId) ? 30 : 3;
+    const usage = await redis([['INCR', `fixrecord:requests:${month}:${installId}`], ['EXPIRE', `fixrecord:requests:${month}:${installId}`, 2678400]]);
+    return (usage[0]?.result ?? monthlyLimit + 1) <= monthlyLimit;
   }
   if (process.env.VERCEL) return false;
-  const state = memory.get(installId) ?? { minute, day, month, minuteCount: 0, dayCount: 0, jobs: new Map<string, number>() };
+  const state = memory.get(installId) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
   if (state.minute !== minute) { state.minute = minute; state.minuteCount = 0; }
   if (state.day !== day) { state.day = day; state.dayCount = 0; }
-  if (state.month !== month) { state.month = month; state.jobs.clear(); }
-  state.minuteCount++; state.dayCount++;
+  if (state.month !== month) { state.month = month; state.monthlyCount = 0; }
+  state.minuteCount++; state.dayCount++; state.monthlyCount++;
   memory.set(installId, state);
   if (state.minuteCount > 6 || state.dayCount > 100) return false;
-  const monthlyJobLimit = await isPro(appUserId) ? 100 : 10;
-  const rewrites = state.jobs.get(jobId) ?? 0;
-  if (rewrites === 0 && state.jobs.size >= monthlyJobLimit) return false;
-  state.jobs.set(jobId, rewrites + 1);
-  return rewrites < 5;
+  return state.monthlyCount <= (await isPro(appUserId) ? 30 : 3);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -132,7 +123,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     afterImage = await normaliseImage(input.afterImage);
   } catch { return res.status(400).json({ error: 'Invalid job photo' }); }
   const key = `${input.installId}:${ipKey}`;
-  try { if (!(await allowed(key, input.installId, input.jobId, input.revenueCatAppUserId))) return res.status(429).json({ error: 'AI limit reached' }); }
+  try { if (!(await allowed(key, input.installId, input.revenueCatAppUserId))) return res.status(429).json({ error: 'AI limit reached' }); }
   catch { return res.status(503).json({ error: 'Usage service unavailable' }); }
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 16000);
   try {

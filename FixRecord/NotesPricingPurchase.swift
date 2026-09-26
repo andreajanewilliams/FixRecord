@@ -232,7 +232,7 @@ struct UpgradeView: View {
                     Label("Remove FixRecord branding", systemImage: "checkmark.circle.fill")
                     Label("Add your business logo", systemImage: "checkmark.circle.fill")
                     Label("Choose premium templates", systemImage: "checkmark.circle.fill")
-                    Label("More AI-assisted writing", systemImage: "checkmark.circle.fill")
+                    Label("30 AI requests per month (Free: 3)", systemImage: "checkmark.circle.fill")
                 }.font(.subheadline).foregroundStyle(Brand.navy).padding(20).frame(maxWidth: .infinity, alignment: .leading)
                     .background(.white, in: RoundedRectangle(cornerRadius: 16))
                 if !service.isPro {

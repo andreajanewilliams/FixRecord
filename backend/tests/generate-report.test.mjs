@@ -106,3 +106,88 @@ test('returns a setup error without an API key and rejects incomplete model outp
   await handler(req, incomplete);
   assert.equal(incomplete.statusCode, 502);
 });
+
+test('Free allows three AI requests per month, including retries on one job', async () => {
+  const req = request({ roughNotes: 'Replaced the washer.' });
+  req.body.revenueCatAppUserId = req.body.installId;
+  req.socket.remoteAddress = '192.0.2.78';
+  let modelCalls = 0;
+  globalThis.fetch = async () => {
+    modelCalls++;
+    return new Response(JSON.stringify({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ reportedIssue: '', workCompleted: '', completionNotes: '', professionalSummary: 'Washer replaced.' }) }] }] }), { status: 200 });
+  };
+  for (let count = 1; count <= 4; count++) {
+    const res = response();
+    await handler(req, res);
+    assert.equal(res.statusCode, count <= 3 ? 200 : 429);
+  }
+  assert.equal(modelCalls, 3);
+});
+
+test('hosted Redis quota blocks a fourth Free request before OpenAI is called', async () => {
+  process.env.VERCEL = '1';
+  process.env.UPSTASH_REDIS_REST_URL = 'https://example.upstash.io';
+  process.env.UPSTASH_REDIS_REST_TOKEN = 'test-only-token';
+  const counters = new Map();
+  const req = request({ roughNotes: 'Replaced the washer.' });
+  req.headers['x-vercel-forwarded-for'] = '192.0.2.80';
+  req.body.revenueCatAppUserId = req.body.installId;
+  let modelCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (url === 'https://example.upstash.io/pipeline') {
+      const commands = JSON.parse(options.body);
+      return new Response(JSON.stringify(commands.map(([command, key]) => {
+        if (command === 'INCR') {
+          const value = (counters.get(key) ?? 0) + 1;
+          counters.set(key, value);
+          return { result: value };
+        }
+        return { result: 1 };
+      })), { status: 200 });
+    }
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    modelCalls++;
+    return new Response(JSON.stringify({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ reportedIssue: '', workCompleted: '', completionNotes: '', professionalSummary: 'Washer replaced.' }) }] }] }), { status: 200 });
+  };
+  try {
+    for (let count = 1; count <= 4; count++) {
+      const res = response();
+      await handler(req, res);
+      assert.equal(res.statusCode, count <= 3 ? 200 : 429);
+    }
+    assert.equal(modelCalls, 3);
+  } finally {
+    delete process.env.VERCEL;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  }
+});
+
+test('verified Pro allows thirty AI requests per month', async () => {
+  const originalNow = Date.now;
+  const start = originalNow();
+  let minute = 0;
+  Date.now = () => start + minute * 60_000;
+  const req = request({ roughNotes: 'Replaced the washer.' });
+  req.body.revenueCatAppUserId = req.body.installId;
+  req.socket.remoteAddress = '192.0.2.79';
+  process.env.REVENUECAT_SECRET_API_KEY = 'test-only-revenuecat-key';
+  let modelCalls = 0;
+  globalThis.fetch = async url => {
+    if (url.startsWith('https://api.revenuecat.com/')) return new Response(JSON.stringify({ subscriber: { entitlements: { pro: { expires_date: null } } } }), { status: 200 });
+    modelCalls++;
+    return new Response(JSON.stringify({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ reportedIssue: '', workCompleted: '', completionNotes: '', professionalSummary: 'Washer replaced.' }) }] }] }), { status: 200 });
+  };
+  try {
+    for (let count = 1; count <= 31; count++) {
+      minute = Math.floor((count - 1) / 5);
+      const res = response();
+      await handler(req, res);
+      assert.equal(res.statusCode, count <= 30 ? 200 : 429);
+    }
+    assert.equal(modelCalls, 30);
+  } finally {
+    Date.now = originalNow;
+    delete process.env.REVENUECAT_SECRET_API_KEY;
+  }
+});
