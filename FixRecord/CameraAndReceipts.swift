@@ -111,7 +111,6 @@ struct PhotoCaptureView: View {
             photos.append(JobPhoto(kind: kind, filename: filename, pairedBeforeID: kind == .after ? selectedBeforeID : nil))
             job.photos = photos
             job.technicianConfirmed = false
-            if job.status == .draft { job.status = .inProgress }
             qualityWarning = ImageQuality.warning(for: image) ?? ""
             if kind == .after, let before = beforePhotos.first(where: { $0.id == selectedBeforeID }), let original = PhotoStore.image(before.filename) {
                 alignmentGuidance = MatchShotBridge.compare(before: original, after: image).guidance

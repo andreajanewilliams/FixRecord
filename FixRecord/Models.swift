@@ -116,7 +116,7 @@ struct JobDefaultsState: Codable, Equatable {
     private static func same(_ first: String, _ second: String) -> Bool { first.caseInsensitiveCompare(second) == .orderedSame }
 }
 
-enum JobStatus: String, CaseIterable, Codable { case draft = "Draft", inProgress = "In Progress", completed = "Completed" }
+enum JobStatus: String, CaseIterable, Codable { case inProgress = "In Progress", completed = "Completed" }
 enum PhotoKind: String, Codable { case before, after }
 
 struct JobPhoto: Codable, Identifiable, Hashable {
@@ -183,12 +183,12 @@ struct ReceiptRecord: Codable, Identifiable {
         id = UUID(); self.number = number; self.title = title; self.clientName = clientName
         clientEmail = ""; clientPhone = ""; self.siteAddress = siteAddress; self.category = category
         self.issue = issue; self.technician = technician; self.businessName = businessName
-        createdAt = Date(); completedAt = nil; statusRaw = JobStatus.draft.rawValue
+        createdAt = Date(); completedAt = nil; statusRaw = JobStatus.inProgress.rawValue
         roughNote = ""; professionalNote = ""; invoiceNotes = ""; self.currencyCode = currencyCode
         self.taxRate = taxRate; discount = "0"; dueDate = Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date()
         paid = false; technicianConfirmed = false; photosData = Data(); itemsData = Data(); receiptsData = Data(); documentPresetData = nil; self.isSample = isSample
     }
-    var status: JobStatus { get { JobStatus(rawValue: statusRaw) ?? .draft } set { statusRaw = newValue.rawValue; completedAt = newValue == .completed ? Date() : nil; if newValue != .completed { technicianConfirmed = false } } }
+    var status: JobStatus { get { JobStatus(rawValue: statusRaw) ?? .inProgress } set { statusRaw = newValue.rawValue; completedAt = newValue == .completed ? Date() : nil; if newValue != .completed { technicianConfirmed = false } } }
     var photos: [JobPhoto] { get { (try? JSONDecoder().decode([JobPhoto].self, from: photosData)) ?? [] } set { photosData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
     var items: [PriceItem] { get { (try? JSONDecoder().decode([PriceItem].self, from: itemsData)) ?? [] } set { itemsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }
     var receipts: [ReceiptRecord] { get { (try? JSONDecoder().decode([ReceiptRecord].self, from: receiptsData)) ?? [] } set { receiptsData = (try? JSONEncoder().encode(newValue)) ?? Data() } }

@@ -462,32 +462,32 @@ struct JobDetailView: View {
                     Text(job.number).font(.caption).foregroundStyle(.secondary)
                     if job.isSample { Label("EXAMPLE JOB", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Job progress").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Menu {
-                        ForEach(JobStatus.allCases, id: \.self) { status in
-                            Button { job.status = status } label: {
-                                if job.status == status { Label(status.rawValue, systemImage: "checkmark") }
-                                else { Text(status.rawValue) }
-                            }
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        Image(systemName: job.status == .completed ? "checkmark.circle.fill" : "clock")
+                            .font(.title2)
+                            .foregroundStyle(job.status == .completed ? Brand.teal : Brand.blue)
+                            .frame(width: 44, height: 44)
+                            .background(job.status == .completed ? Brand.teal.opacity(0.1) : Brand.pale, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Job status").font(.caption).foregroundStyle(.secondary)
+                            Text(job.status.rawValue).font(.headline).foregroundStyle(Brand.navy)
                         }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: job.status == .completed ? "checkmark.circle.fill" : "circle.inset.filled")
-                                .font(.title3).foregroundStyle(job.status == .completed ? Brand.teal : Brand.blue)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(job.status.rawValue).font(.headline).foregroundStyle(Brand.navy)
-                                Text(job.status == .draft ? "Ready to start" : job.status == .inProgress ? "Work underway" : "Work finished")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text("Change").font(.subheadline).foregroundStyle(Brand.blue)
-                            Image(systemName: "chevron.down").font(.caption).foregroundStyle(Brand.blue)
-                        }
-                        .padding(14).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                        Spacer()
                     }
-                    .accessibilityLabel("Job progress, \(job.status.rawValue). Change status")
+                    Button {
+                        job.status = job.status == .completed ? .inProgress : .completed
+                    } label: {
+                        Label(job.status == .completed ? "Move to In Progress" : "Mark as Completed",
+                              systemImage: job.status == .completed ? "arrow.uturn.backward" : "checkmark")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .foregroundStyle(job.status == .completed ? Brand.blue : .white)
+                            .background(job.status == .completed ? Brand.pale : Brand.blue, in: RoundedRectangle(cornerRadius: 10))
+                    }.buttonStyle(.plain)
                 }
+                .padding(16).background(.white, in: RoundedRectangle(cornerRadius: 13))
                 NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Add or review before and after", icon: "photo.on.rectangle.angled") }
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }

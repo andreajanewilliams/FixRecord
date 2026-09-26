@@ -30,7 +30,7 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(copy.issue, original.issue)
         XCTAssertEqual(copy.documentPreset, original.documentPreset)
         XCTAssertEqual(copy.currencyCode, original.currencyCode)
-        XCTAssertEqual(copy.status, .draft)
+        XCTAssertEqual(copy.status, .inProgress)
         XCTAssertNil(copy.completedAt)
         XCTAssertGreaterThan(copy.createdAt, original.createdAt)
         XCTAssertFalse(copy.technicianConfirmed)
@@ -44,6 +44,20 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(copy.items.map(\.name), original.items.map(\.name))
         XCTAssertTrue(copy.items.allSatisfy { $0.sourceReceiptID == nil })
         XCTAssertTrue(zip(copy.items, original.items).allSatisfy { $0.id != $1.id })
+    }
+
+    func testLegacyDraftAppearsInProgressAndCanBeCompletedAndReopened() {
+        let job = SampleJob.make()
+        job.statusRaw = "Draft"
+        job.completedAt = nil
+        XCTAssertEqual(job.status, .inProgress)
+        XCTAssertEqual(JobFilter.visible([job], status: .inProgress, search: "").map(\.id), [job.id])
+        job.status = .completed
+        XCTAssertNotNil(job.completedAt)
+        job.technicianConfirmed = true
+        job.status = .inProgress
+        XCTAssertNil(job.completedAt)
+        XCTAssertFalse(job.technicianConfirmed)
     }
 
     func testCurrencyDefaultsAndCustomCodes() {
