@@ -42,6 +42,12 @@ struct ExportView: View {
     private var profile: BusinessProfile? { profiles.first }
     private var renderProfile: BusinessProfile? { job.documentProfile(fallback: profile) }
     private var hasBusinessName: Bool { renderProfile?.businessName.isEmpty == false || !job.businessName.isEmpty }
+    private var documentDetailsSubtitle: String {
+        guard hasBusinessName else { return "Add your business details" }
+        if let name = job.documentPreset?.name { return name }
+        let businessName = renderProfile?.businessName ?? ""
+        return businessName.isEmpty ? job.businessName : businessName
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -88,44 +94,52 @@ struct ExportView: View {
         .onChange(of: job.documentPresetData) { _, _ in render() }
     }
     private var documentSetup: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "slider.horizontal.3").foregroundStyle(Brand.blue)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Document setup").font(.subheadline.bold()).foregroundStyle(Brand.navy)
-                    Text(hasBusinessName ? (job.documentPreset?.name ?? "Current settings") : "Add your business details")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            HStack(spacing: 10) {
-                Button {
-                    editingJobPreset = presetDraft()
-                } label: { Text(hasBusinessName ? "Customise" : "Add details").frame(maxWidth: .infinity) }
-                .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
-                Menu {
-                    ForEach(store.presets) { preset in
-                        Button {
-                            pendingPreset = preset
-                        } label: {
-                            if job.documentPreset?.id == preset.id { Label(preset.name, systemImage: "checkmark") }
-                            else { Text(preset.name) }
-                        }
+        VStack(spacing: 0) {
+            Button { editingJobPreset = presetDraft() } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Brand.blue)
+                        .frame(width: 40, height: 40)
+                        .background(Brand.pale, in: RoundedRectangle(cornerRadius: 12))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Document details").font(.subheadline.bold()).foregroundStyle(Brand.navy)
+                        Text(documentDetailsSubtitle)
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    if !store.presets.isEmpty { Divider() }
-                    Button { var draft = presetDraft(); draft.name = ""; creatingPreset = draft } label: {
-                        Label("Create New Preset", systemImage: "plus")
-                    }
-                } label: {
-                    Label("Presets", systemImage: "square.on.square")
-                        .frame(maxWidth: .infinity)
+                    Spacer(minLength: 8)
+                    Text(hasBusinessName ? "Edit" : "Set up").font(.subheadline.weight(.semibold)).foregroundStyle(Brand.blue)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Brand.blue)
                 }
-                .buttonStyle(.bordered).frame(maxWidth: .infinity)
+                .padding(15).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Rectangle().fill(Brand.navy.opacity(0.08)).frame(height: 1).padding(.leading, 67)
+            Menu {
+                ForEach(store.presets) { preset in
+                    Button { pendingPreset = preset } label: {
+                        if job.documentPreset?.id == preset.id { Label(preset.name, systemImage: "checkmark") }
+                        else { Text(preset.name) }
+                    }
+                }
+                if !store.presets.isEmpty { Divider() }
+                Button { var draft = presetDraft(); draft.name = ""; creatingPreset = draft } label: {
+                    Label("Create New Preset", systemImage: "plus")
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "square.on.square").font(.subheadline.weight(.semibold)).foregroundStyle(Brand.blue)
+                        .frame(width: 40)
+                    Text("Presets").font(.subheadline.weight(.semibold)).foregroundStyle(Brand.navy)
+                    Spacer()
+                    Text(store.presets.isEmpty ? "Create one" : "Choose").font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 15).padding(.vertical, 13).contentShape(Rectangle())
             }
-            Text("Save a preset to reuse your document details on future jobs.")
-                .font(.caption2).foregroundStyle(.secondary)
         }
-        .padding(12).background(Brand.pale, in: RoundedRectangle(cornerRadius: 13))
+        .background(.white, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Brand.navy.opacity(0.06)))
+        .shadow(color: Brand.navy.opacity(0.04), radius: 10, y: 4)
     }
     private func presetDraft() -> SavedPreset {
         var draft = job.documentPreset ?? SavedPreset.custom(profile: profile)
