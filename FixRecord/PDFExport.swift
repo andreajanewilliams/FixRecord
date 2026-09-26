@@ -351,6 +351,8 @@ enum PDFMaker {
 
     private static func drawTextReport(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
         context.beginPage()
+        let business = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
+        if options.template == .modern {
         var nameX = margin
         if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
             aspectFill(logo, in: CGRect(x: margin, y: 34, width: 48, height: 48)); nameX += 60
@@ -359,7 +361,6 @@ enum PDFMaker {
             drawPDFSymbol("wrench.adjustable.fill", in: CGRect(x: margin + 10, y: 44, width: 28, height: 28), colour: .white)
             nameX += 60
         }
-        let business = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
         text(business.isEmpty ? "Your Business" : business, x: nameX, y: 38, width: 280, size: 20, bold: true, colour: navy)
         text("Professional work documentation", x: nameX, y: 66, width: 270, size: 9, colour: .darkGray)
         if options.showBusinessDetails {
@@ -367,6 +368,8 @@ enum PDFMaker {
             text(contact, x: 377, y: 38, width: 174, height: 56, size: 8, colour: navy, alignment: .right, wrap: true)
         }
         line(106)
+
+        } else { _ = header("WORK REPORT", job: job, profile: profile, options: options) }
 
         text("Work Report", x: margin, y: 122, width: 360, size: 28, bold: true, colour: navy)
         let completed = job.status == .completed
@@ -509,7 +512,7 @@ enum PDFMaker {
             let items = job.items.filter { $0.kind == kind }
             guard !items.isEmpty else { continue }
             ensure(27, y: &y, context: context, options: options)
-            fill(CGRect(x: margin, y: y, width: contentWidth, height: 20), colour: pale)
+            fill(CGRect(x: margin, y: y, width: contentWidth, height: 20), colour: options.template == .classic ? UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1) : pale)
             text(heading, x: margin + 7, y: y + 4, width: 280, size: 8, bold: true, colour: navy); y += 21
             for item in items {
                 ensure(27, y: &y, context: context, options: options)
@@ -525,7 +528,7 @@ enum PDFMaker {
         amount("Subtotal", totals.subtotal, currency: job.currencyCode, y: &y)
         if options.showDiscount && totals.discount > 0 { amount("Discount", -totals.discount, currency: job.currencyCode, y: &y) }
         if options.showTax && totals.tax > 0 { amount("Tax / VAT (\(job.taxRate)%)", totals.tax, currency: job.currencyCode, y: &y) }
-        fill(CGRect(x: 333, y: y + 2, width: 218, height: 33), colour: pale)
+        fill(CGRect(x: 333, y: y + 2, width: 218, height: 33), colour: options.template == .classic ? UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1) : pale)
         amount("TOTAL DUE", totals.grandTotal, currency: job.currencyCode, y: &y, bold: true)
         if options.showPaymentInstructions, let payment = profile?.paymentInstructions, !payment.isEmpty {
             y += 15; section("PAYMENT DETAILS", y: &y); paragraph(payment, y: &y, context: context, options: options)
@@ -537,6 +540,35 @@ enum PDFMaker {
     }
 
     private static func header(_ title: String, job: Job, profile: BusinessProfile?, options: DocumentOptions) -> CGFloat {
+        let business = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
+        let name = business.isEmpty ? "Your Business" : business
+        let contact = options.showBusinessDetails ? [profile?.phone, profile?.email, profile?.address,
+            title == "INVOICE" && profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  ·  ") : ""
+        if options.template == .classic {
+            navy.setFill(); UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 96)).fill()
+            var x = margin
+            if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
+                fill(CGRect(x: margin, y: 29, width: 46, height: 46), colour: .white)
+                aspectFill(logo, in: CGRect(x: margin + 3, y: 32, width: 40, height: 40)); x += 58
+            }
+            text(name, x: x, y: 29, width: 365 - x, size: 21, bold: true, colour: .white)
+            text(contact, x: x, y: 59, width: 395, height: 28, size: 8, colour: UIColor.white.withAlphaComponent(0.8), wrap: true)
+            text(title, x: 419, y: 31, width: 132, size: 8, bold: true, colour: UIColor(red: 0.88, green: 0.75, blue: 0.51, alpha: 1), alignment: .right)
+            UIColor(red: 0.72, green: 0.56, blue: 0.31, alpha: 1).setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: 96, width: page.width, height: 3)).fill()
+            return 117
+        }
+        if options.template == .minimal {
+            var x = margin
+            if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
+                aspectFill(logo, in: CGRect(x: margin, y: 31, width: 42, height: 42)); x += 54
+            }
+            text(name, x: x, y: 30, width: 551 - x, size: 22, colour: navy, alignment: .center)
+            text(contact, x: x, y: 60, width: 551 - x, height: 25, size: 8, colour: .darkGray, alignment: .center, wrap: true)
+            line(93)
+            return 113
+        }
         var nameX = margin
         if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
             aspectFill(logo, in: CGRect(x: margin, y: 39, width: 43, height: 43)); nameX += 54
@@ -607,7 +639,16 @@ enum PDFMaker {
     }
     private static func panel(_ rect: CGRect, template: DocumentTemplate) {
         if template != .minimal { fill(rect, colour: pale) }
-        if template == .classic { navy.setStroke(); UIBezierPath(roundedRect: rect, cornerRadius: 5).stroke() }
+        if template == .classic {
+            UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1).setFill()
+            UIBezierPath(rect: rect).fill()
+            UIColor(red: 0.72, green: 0.56, blue: 0.31, alpha: 1).setFill()
+            UIBezierPath(rect: CGRect(x: rect.minX, y: rect.minY, width: 2, height: rect.height)).fill()
+        }
+        if template == .minimal {
+            let rule = UIBezierPath(); rule.move(to: CGPoint(x: rect.minX + 9, y: rect.maxY)); rule.addLine(to: CGPoint(x: rect.maxX - 9, y: rect.maxY))
+            UIColor.lightGray.setStroke(); rule.lineWidth = 0.5; rule.stroke()
+        }
     }
     private static func fill(_ rect: CGRect, colour: UIColor) { colour.setFill(); UIBezierPath(roundedRect: rect, cornerRadius: 5).fill() }
     private static func line(_ y: CGFloat) { let path = UIBezierPath(); path.move(to: CGPoint(x: margin, y: y)); path.addLine(to: CGPoint(x: 551, y: y)); UIColor.lightGray.setStroke(); path.lineWidth = 0.6; path.stroke() }

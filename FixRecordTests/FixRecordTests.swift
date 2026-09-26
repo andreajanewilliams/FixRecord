@@ -365,6 +365,22 @@ final class FixRecordTests: XCTestCase {
         XCTAssertNotNil(result.date)
         XCTAssertEqual(result.total, "8.50")
     }
+    func testTemplatePacksPreserveReportAndInvoiceContent() throws {
+        for template in DocumentTemplate.allCases {
+            var options = DocumentOptions(); options.template = template
+            let pdf = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .pack, job: SampleJob.make(), profile: nil, options: options, isPro: true)))
+            XCTAssertEqual(pdf.pageCount, 2, template.rawValue)
+            XCTAssertTrue(pdf.page(at: 0)?.string?.contains("Kitchen Sink Repair") == true)
+            XCTAssertTrue(pdf.page(at: 1)?.string?.contains("INVOICE") == true)
+            for index in 0..<pdf.pageCount {
+                let page = try XCTUnwrap(pdf.page(at: index))
+                let attachment = XCTAttachment(image: page.thumbnail(of: CGSize(width: 595, height: 842), for: .mediaBox))
+                attachment.name = "\(template.rawValue)-\(index)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+    }
     func testPDFAndAIFallbackDecoding() throws {
         let job = SampleJob.make()
         let data = try PDFMaker.make(kind: .pack, job: job, profile: nil, isPro: true)

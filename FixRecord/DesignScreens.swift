@@ -955,25 +955,85 @@ struct TemplatesView: View {
     @State private var options = DocumentOptions.load()
     @StateObject private var entitlements = EntitlementService.shared
     @State private var showingUpgrade = false
+    @State private var preview: DocumentTemplate?
+    @State private var documents: [DocumentTemplate: Data] = [:]
+    @State private var thumbnails: [DocumentTemplate: [UIImage]] = [:]
+    private var selected: DocumentTemplate { options.effective(isPro: entitlements.isPro).template }
     var body: some View {
-        List {
-            ForEach(DocumentTemplate.allCases, id: \.self) { template in
-                Button {
-                    if entitlements.isPro || template == .modern { options.template = template; options.save() }
-                    else { showingUpgrade = true }
-                } label: {
-                    HStack(spacing: 15) {
-                        Image(systemName: "doc.text.image").font(.title2).frame(width: 48, height: 62).background(Brand.pale, in: RoundedRectangle(cornerRadius: 6))
-                        VStack(alignment: .leading) { Text(template.rawValue).font(.headline); Text(template == .modern ? "Clean and professional" : template == .minimal ? "Simple and spacious" : "Traditional layout").font(.caption).foregroundStyle(.secondary) }
-                        Spacer()
-                        if options.template == template { Image(systemName: "checkmark.circle.fill").foregroundStyle(Brand.blue) }
-                        else if !entitlements.isPro { Text("PRO").font(.caption2.bold()).foregroundStyle(Brand.blue) }
-                    }
-                }.foregroundStyle(Brand.navy)
-            }
-        }.navigationTitle("Templates")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Make every job look professional.").font(.title2.bold()).foregroundStyle(Brand.navy)
+                    Text("Preview a matching report and invoice, then choose your style.").font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(DocumentTemplate.allCases, id: \.self) { template in
+                    VStack(alignment: .leading, spacing: 16) {
+                        Button { preview = template } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                ForEach(Array((thumbnails[template] ?? []).enumerated()), id: \.offset) { index, image in
+                                    VStack(spacing: 8) {
+                                        Image(uiImage: image).resizable().scaledToFit()
+                                            .background(.white).clipShape(RoundedRectangle(cornerRadius: 4))
+                                            .shadow(color: .black.opacity(0.12), radius: 6, y: 4)
+                                        Text(index == 0 ? "Work report" : "Invoice").font(.caption).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity)
+                                }
+                            }.padding(18).frame(maxWidth: .infinity, minHeight: 180)
+                                .background(Brand.pale, in: RoundedRectangle(cornerRadius: 12))
+                        }.buttonStyle(.plain).accessibilityLabel("Preview \(template.rawValue) report and invoice")
+                        HStack {
+                            Text(template.rawValue).font(.title3.bold())
+                            if template != .modern {
+                                Text("PRO").font(.caption2.bold()).padding(.horizontal, 7).padding(.vertical, 4)
+                                    .foregroundStyle(Brand.blue).background(Brand.pale, in: Capsule())
+                            }
+                            Spacer()
+                            if selected == template { Label("Selected", systemImage: "checkmark.circle.fill").font(.caption.weight(.semibold)).foregroundStyle(Brand.blue) }
+                        }.foregroundStyle(Brand.navy)
+                        Text(description(template)).font(.subheadline).foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Button("Preview") { preview = template }.buttonStyle(.bordered)
+                            Button(selected == template ? "Selected" : entitlements.isPro || template == .modern ? "Use template" : "Unlock with Pro") {
+                                if entitlements.isPro || template == .modern { options.template = template; options.save() }
+                                else { showingUpgrade = true }
+                            }.buttonStyle(.borderedProminent).disabled(selected == template)
+                        }.controlSize(.large)
+                    }.padding(16).background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
+                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(selected == template ? Brand.blue.opacity(0.5) : Color.primary.opacity(0.07), lineWidth: 1))
+                }
+                Text("Your default style is used for new jobs. Existing jobs keep their document settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(18)
+        }.background(Brand.pale.opacity(0.4)).navigationTitle("Templates")
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
-            .task { await entitlements.refresh() }
+            .sheet(isPresented: Binding(get: { preview != nil }, set: { if !$0 { preview = nil } })) {
+                NavigationStack {
+                    if let preview, let data = documents[preview] {
+                        PDFPreview(data: data).navigationTitle("\(preview.rawValue) preview").navigationBarTitleDisplayMode(.inline)
+                            .toolbar { Button("Done") { self.preview = nil } }
+                    }
+                }
+            }
+            .task {
+                if documents.isEmpty {
+                    let sample = SampleJob.make()
+                    for template in DocumentTemplate.allCases {
+                        var example = DocumentOptions(); example.template = template
+                        guard let data = try? PDFMaker.make(kind: .pack, job: sample, profile: nil, options: example, isPro: true),
+                              let pdf = PDFDocument(data: data) else { continue }
+                        documents[template] = data
+                        thumbnails[template] = (0..<min(2, pdf.pageCount)).compactMap { pdf.page(at: $0)?.thumbnail(of: CGSize(width: 420, height: 594), for: .mediaBox) }
+                    }
+                }
+                await entitlements.refresh()
+            }
+    }
+    private func description(_ template: DocumentTemplate) -> String {
+        switch template {
+        case .modern: return "Clear blue details and a practical layout for everyday jobs."
+        case .minimal: return "A quiet, centred letterhead with fine rules and open space. Clean on screen and economical to print."
+        case .classic: return "A bold navy letterhead, warm brass accents and structured details for a more established business feel."
+        }
     }
 }
 
