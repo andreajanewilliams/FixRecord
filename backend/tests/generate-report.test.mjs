@@ -176,7 +176,7 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
       return new Response(JSON.stringify(commands.map(([command, key, ...args]) => {
         if (command === 'EVAL') {
           const [, monthlyKey, totalKey, limit] = args;
-          if ((counters.get(monthlyKey) ?? 0) >= limit || (counters.get(totalKey) ?? 0) >= 300) return { result: 0 };
+          if ((counters.get(monthlyKey) ?? 0) >= limit || (counters.get(totalKey) ?? 0) >= 600) return { result: 0 };
           counters.set(monthlyKey, (counters.get(monthlyKey) ?? 0) + 1);
           counters.set(totalKey, (counters.get(totalKey) ?? 0) + 1);
           return { result: 1 };
@@ -205,7 +205,7 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
     const second = response();
     await handler(req, second);
     assert.equal(second.statusCode, 200);
-    counters.set('fixrecord:judging-total', 299);
+    counters.set('fixrecord:judging-total', 599);
     req.body.installId = crypto.randomUUID();
     const last = response();
     await handler(req, last);
@@ -215,7 +215,7 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
     await handler(req, exhausted);
     assert.equal(exhausted.statusCode, 429);
     assert.equal(modelCalls, 5);
-    assert.equal(counters.get('fixrecord:judging-total'), 300);
+    assert.equal(counters.get('fixrecord:judging-total'), 600);
   } finally {
     delete process.env.VERCEL;
     delete process.env.UPSTASH_REDIS_REST_URL;

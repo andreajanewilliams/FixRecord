@@ -291,7 +291,7 @@ struct AIAccessCodeView: View {
                 }.disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if saved { Button("Remove Code", role: .destructive) { AIAccessCodeStore.remove(); saved = false; message = "Code removed." } }
             } footer: {
-                Text("Your code unlocks AI. Each installation receives 3 Free or 30 Pro requests per month, subject to the shared judging allowance. It is stored on this device and is not included in exported documents.")
+                Text("Enter the judging code from the submission notes. Can’t find it? [Email Andrea](mailto:andreajanewilliams2@gmail.com)")
             }
             if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
         }

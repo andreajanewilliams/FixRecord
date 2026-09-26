@@ -96,7 +96,7 @@ async function allowed(key: string, installId: string, access: AccessIdentity): 
     const script = `
       local monthly = tonumber(redis.call('GET', KEYS[1]) or '0')
       local total = tonumber(redis.call('GET', KEYS[2]) or '0')
-      if monthly >= tonumber(ARGV[1]) or total >= 300 then return 0 end
+      if monthly >= tonumber(ARGV[1]) or total >= 600 then return 0 end
       redis.call('INCR', KEYS[1])
       redis.call('EXPIRE', KEYS[1], 2678400)
       redis.call('INCR', KEYS[2])
@@ -112,7 +112,7 @@ async function allowed(key: string, installId: string, access: AccessIdentity): 
   state.minuteCount++; state.dayCount++;
   memory.set(installId, state);
   if (state.minuteCount > 6 || state.dayCount > 100) return false;
-  if (state.monthlyCount >= (access.isPro ? 30 : 3) || judgingRequests >= 300) return false;
+  if (state.monthlyCount >= (access.isPro ? 30 : 3) || judgingRequests >= 600) return false;
   state.monthlyCount++; judgingRequests++;
   return true;
 }

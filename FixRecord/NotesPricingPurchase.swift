@@ -151,7 +151,7 @@ struct NotesView: View {
                 } else if !AIService.isConfigured {
                     Text("AI writing will be available after setup.").font(.caption).foregroundStyle(.secondary)
                 } else if !hasAccessCode {
-                    Text("Enter your AI access code in Settings to use AI writing.").font(.caption).foregroundStyle(.secondary)
+                    NavigationLink("Enter judging code") { AIAccessCodeView() }.font(.subheadline)
                 }
             }
             if !message.isEmpty { Section { Text(message).font(.caption).foregroundStyle(.secondary) } }
