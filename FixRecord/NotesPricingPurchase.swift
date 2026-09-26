@@ -297,6 +297,7 @@ struct PricingView: View {
 }
 
 struct UpgradeView: View {
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var service = EntitlementService.shared
     var body: some View {
         ScrollView {
@@ -307,6 +308,7 @@ struct UpgradeView: View {
                     Text("Make every document your business's own.").multilineTextAlignment(.center).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity).padding(.top, 28)
                 VStack(alignment: .leading, spacing: 16) {
+                    Label("Combine report and invoice in a Client Pack", systemImage: "checkmark.circle.fill")
                     Label("Remove FixRecord branding", systemImage: "checkmark.circle.fill")
                     Label("Add your business logo", systemImage: "checkmark.circle.fill")
                     Label("Choose premium templates", systemImage: "checkmark.circle.fill")
@@ -320,12 +322,17 @@ struct UpgradeView: View {
                                 .font(.headline).frame(maxWidth: .infinity).padding(15).foregroundStyle(.white).background(Brand.blue, in: RoundedRectangle(cornerRadius: 12))
                         }
                     }
-                    if service.packages.isEmpty { Text("Purchases are unavailable right now.").font(.caption).foregroundStyle(.secondary) }
+                    if service.packages.isEmpty {
+                        Text(service.configured ? "Pro plans are unavailable right now." : "Pro purchases aren't enabled in this test build.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Button("Restore Purchases") { Task { await service.restore() } }.disabled(!service.configured).frame(maxWidth: .infinity)
                 if !service.message.isEmpty { Text(service.message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity) }
             }.padding(20)
-        }.background(Brand.background).navigationTitle("FixRecord Pro").navigationBarTitleDisplayMode(.inline).task { await service.refresh() }
+        }.background(Brand.background).navigationTitle("FixRecord Pro").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .task { await service.refresh() }
     }
 }
 

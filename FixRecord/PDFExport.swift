@@ -42,6 +42,7 @@ struct ExportView: View {
     private var profile: BusinessProfile? { profiles.first }
     private var renderProfile: BusinessProfile? { job.documentProfile(fallback: profile) }
     private var hasBusinessName: Bool { renderProfile?.businessName.isEmpty == false || !job.businessName.isEmpty }
+    private var clientPackLocked: Bool { kind == .pack && !entitlements.isPro }
     private var documentDetailsSubtitle: String {
         guard hasBusinessName else { return "Add your business details" }
         if let name = job.documentPreset?.name { return name }
@@ -51,18 +52,29 @@ struct ExportView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Picker("Document", selection: $kind) { ForEach(ExportKind.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+            Picker("Document", selection: $kind) {
+                ForEach(ExportKind.allCases, id: \.self) { document in
+                    if document == .pack && !entitlements.isPro {
+                        Label("Client Pack", systemImage: "star.fill")
+                            .accessibilityLabel("Client Pack, Pro")
+                            .tag(document)
+                    } else {
+                        Text(document.rawValue).tag(document)
+                    }
+                }
+            }
                 .pickerStyle(.segmented).padding(.horizontal)
-            documentSetup.padding(.horizontal)
-            if kind == .pack && !entitlements.isPro {
-                ContentUnavailableView("Client Pack is Pro", systemImage: "lock.doc", description: Text("Work Reports and Invoices remain free."))
-                Button("Upgrade to Pro") { showingUpgrade = true }.buttonStyle(.borderedProminent)
+            if !clientPackLocked { documentSetup.padding(.horizontal) }
+            if clientPackLocked {
+                clientPackPreview
             } else if data.isEmpty {
                 ContentUnavailableView("No preview", systemImage: "doc", description: Text(error))
             } else { PDFPreview(data: data) }
-            Button { showingShare = true } label: { Text("Export").frame(maxWidth: .infinity) }
-                .buttonStyle(.borderedProminent).disabled(url == nil)
-                .padding(.horizontal).padding(.bottom, 6)
+            if !clientPackLocked {
+                Button { showingShare = true } label: { Text("Export").frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent).disabled(url == nil)
+                    .padding(.horizontal).padding(.bottom, 6)
+            }
         }
         .navigationTitle("Preview").navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingShare) { if let url { NavigationStack { ShareOptionsView(url: url, packURL: packURL, data: data, title: job.number) } } }
@@ -87,11 +99,57 @@ struct ExportView: View {
             Text("This updates this job’s business and document settings. Client details and work notes stay as they are.")
         }
         .onAppear { render() }
-        .onChange(of: kind) { _, _ in render() }
+        .onChange(of: kind) { _, selected in
+            render()
+            if selected == .pack {
+                Task {
+                    await entitlements.refresh()
+                    if clientPackLocked { showingUpgrade = true }
+                }
+            }
+        }
         .task { await entitlements.refresh(); render() }
         .onChange(of: entitlements.isPro) { _, _ in render() }
         .onChange(of: showPhotosInWorkReport) { _, _ in render() }
         .onChange(of: job.documentPresetData) { _, _ in render() }
+    }
+    private var clientPackPreview: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 20)
+            VStack(spacing: 18) {
+                Image(systemName: "doc.on.doc.fill")
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(Brand.blue)
+                    .frame(width: 76, height: 76)
+                    .background(Brand.pale, in: RoundedRectangle(cornerRadius: 22))
+                Text("One PDF for your client")
+                    .font(.title2.bold()).foregroundStyle(Brand.navy)
+                Text("Combine the work report and invoice in one ready-to-share document.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Label("Included with Pro", systemImage: "star.fill")
+                    .font(.caption.bold()).foregroundStyle(Brand.blue)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Brand.pale, in: Capsule())
+                Button { showingUpgrade = true } label: {
+                    Text("View Pro options").font(.headline).frame(maxWidth: .infinity)
+                }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .padding(.top, 4)
+                Text("Reports and invoices can still be exported separately for free.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: 420)
+            .background(.white, in: RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Brand.navy.opacity(0.06)))
+            .shadow(color: Brand.navy.opacity(0.05), radius: 14, y: 6)
+            .padding(.horizontal, 20)
+            Spacer(minLength: 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Brand.background)
     }
     private var documentSetup: some View {
         VStack(spacing: 0) {
