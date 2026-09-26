@@ -462,37 +462,50 @@ struct JobDetailView: View {
                     Text(job.number).font(.caption).foregroundStyle(.secondary)
                     if job.isSample { Label("EXAMPLE JOB", systemImage: "info.circle.fill").font(.caption.bold()).foregroundStyle(Brand.blue) }
                 }
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 12) {
-                        Image(systemName: job.status == .completed ? "checkmark.circle.fill" : "clock")
-                            .font(.title2)
+                        Image(systemName: job.status == .completed ? "checkmark" : "clock")
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(job.status == .completed ? Brand.teal : Brand.blue)
-                            .frame(width: 44, height: 44)
-                            .background(job.status == .completed ? Brand.teal.opacity(0.1) : Brand.pale, in: RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Job status").font(.caption).foregroundStyle(.secondary)
-                            Text(job.status.rawValue).font(.headline).foregroundStyle(Brand.navy)
+                            .frame(width: 42, height: 42)
+                            .background(job.status == .completed ? Brand.teal.opacity(0.11) : Brand.pale, in: Circle())
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("STATUS").font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(.secondary)
+                            Text(job.status.rawValue).font(.subheadline.bold()).foregroundStyle(Brand.navy)
                         }
-                        Spacer()
+                        Spacer(minLength: 8)
+                        Button {
+                            if job.status == .completed { job.status = .inProgress }
+                            else {
+                                job.status = .completed
+                                job.technicianConfirmed = true
+                            }
+                        } label: {
+                            Text(job.status == .completed ? "Reopen" : "Complete")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(job.status == .completed ? Brand.blue : .white)
+                                .padding(.horizontal, 16).padding(.vertical, 10)
+                                .background(job.status == .completed ? Brand.pale : Brand.blue, in: Capsule())
+                        }.buttonStyle(.plain)
                     }
-                    Button {
-                        job.status = job.status == .completed ? .inProgress : .completed
-                    } label: {
-                        Label(job.status == .completed ? "Move to In Progress" : "Mark as Completed",
-                              systemImage: job.status == .completed ? "arrow.uturn.backward" : "checkmark")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .foregroundStyle(job.status == .completed ? Brand.blue : .white)
-                            .background(job.status == .completed ? Brand.pale : Brand.blue, in: RoundedRectangle(cornerRadius: 10))
-                    }.buttonStyle(.plain)
+                    if job.status == .completed && !job.technicianConfirmed {
+                        Divider()
+                        HStack(spacing: 10) {
+                            Text("Report needs confirmation").font(.caption).foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            Button("Confirm") { job.technicianConfirmed = true }
+                                .font(.caption.weight(.semibold)).foregroundStyle(Brand.blue)
+                        }
+                    }
                 }
-                .padding(16).background(.white, in: RoundedRectangle(cornerRadius: 13))
+                .padding(16)
+                .background(.white, in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Brand.navy.opacity(0.06)))
+                .shadow(color: Brand.navy.opacity(0.04), radius: 10, y: 4)
                 NavigationLink { PhotoReviewView(job: job) } label: { feature("Photos", subtitle: "Add or review before and after", icon: "photo.on.rectangle.angled") }
                 NavigationLink { NotesView(job: job) } label: { feature("Work Details", subtitle: "Issue and work completed", icon: "text.alignleft") }
                 NavigationLink { PricingView(job: job) } label: { feature("Materials & Pricing", subtitle: "Add items when you need an invoice", icon: "list.bullet.rectangle") }
                 NavigationLink { ExportView(job: job) } label: { feature("Preview & Export", subtitle: "Work report, invoice or client pack", icon: "doc.richtext") }
-                if job.status == .completed { Toggle("I confirm this work record", isOn: $job.technicianConfirmed).font(.subheadline) }
             }.padding()
         }.background(Brand.background).navigationTitle("Job Details").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Edit") { editing = true } }

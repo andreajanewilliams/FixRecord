@@ -161,9 +161,19 @@ struct OnboardingView: View {
 }
 
 struct JobEditView: View {
+    private struct Details: Equatable {
+        let title, clientName, siteAddress, issue, technician, category, clientEmail, clientPhone: String
+        let createdAt: Date
+        init(_ job: Job) {
+            title = job.title; clientName = job.clientName; siteAddress = job.siteAddress
+            issue = job.issue; technician = job.technician; category = job.category
+            clientEmail = job.clientEmail; clientPhone = job.clientPhone; createdAt = job.createdAt
+        }
+    }
     @Environment(\.dismiss) private var dismiss
     @Bindable var job: Job
     @State private var showingCategory = false
+    @State private var initialDetails: Details?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -196,7 +206,8 @@ struct JobEditView: View {
             }.padding(18)
         }.background(Brand.background).navigationTitle("Edit Job").toolbar { Button("Done") { dismiss() } }
             .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: job.category) { job.category = $0 } }
-            .onDisappear { job.technicianConfirmed = false }
+            .onAppear { if initialDetails == nil { initialDetails = Details(job) } }
+            .onDisappear { if let initialDetails, initialDetails != Details(job) { job.technicianConfirmed = false } }
     }
 }
 
