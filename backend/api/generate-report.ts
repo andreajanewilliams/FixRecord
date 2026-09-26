@@ -2,25 +2,27 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import sharp from 'sharp';
 
-type Input = { installId: string; jobId: string; revenueCatAppUserId: string; jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
+type Input = { jobTitle: string; issueDescription: string; roughNotes: string; materials?: string[]; locale?: string; beforeImage?: string; afterImage?: string };
+type AccessIdentity = { id: string; isPro: boolean };
 const required = ['reportedIssue', 'workCompleted', 'completionNotes', 'professionalSummary'] as const;
 const defaultModel = 'gpt-6-luna';
 const maxImageBytes = 900_000;
 const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; monthlyCount: number }>();
 const ipMemory = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
 
-function accessIdentity(req: VercelRequest): string | undefined {
+function accessIdentity(req: VercelRequest): AccessIdentity | undefined {
   const supplied = req.headers['x-fixrecord-access-code'];
   const code = typeof supplied === 'string' ? supplied.trim() : '';
   if (code.length < 20 || code.length > 128) return undefined;
-  const configured = process.env.AI_ACCESS_CODES?.split(',').map(value => value.trim()).filter(Boolean) ?? [];
   const candidate = createHash('sha256').update(code).digest();
-  let matched = false;
-  for (const allowed of configured) {
-    const digest = createHash('sha256').update(allowed).digest();
-    matched = timingSafeEqual(candidate, digest) || matched;
+  let isFree = false, isPro = false;
+  for (const [codes, pro] of [[process.env.AI_ACCESS_CODES, false], [process.env.AI_PRO_ACCESS_CODES, true]] as const) {
+    for (const allowed of codes?.split(',').map(value => value.trim()).filter(Boolean) ?? []) {
+      const digest = createHash('sha256').update(allowed).digest();
+      if (timingSafeEqual(candidate, digest)) { if (pro) isPro = true; else isFree = true; }
+    }
   }
-  return matched ? candidate.toString('hex') : undefined;
+  return isFree || isPro ? { id: candidate.toString('hex'), isPro } : undefined;
 }
 
 function validImage(value: unknown): value is string {
@@ -41,10 +43,7 @@ async function normaliseImage(value: string | undefined): Promise<string | undef
 function valid(body: unknown): body is Input {
   if (!body || typeof body !== 'object') return false;
   const value = body as Record<string, unknown>;
-  return typeof value.installId === 'string' && /^[a-f0-9-]{36}$/i.test(value.installId)
-    && typeof value.jobId === 'string' && /^[a-f0-9-]{36}$/i.test(value.jobId)
-    && value.revenueCatAppUserId === value.installId
-    && typeof value.jobTitle === 'string' && value.jobTitle.length <= 150
+  return typeof value.jobTitle === 'string' && value.jobTitle.length <= 150
     && typeof value.issueDescription === 'string' && value.issueDescription.length <= 1000
     && typeof value.roughNotes === 'string' && value.roughNotes.length <= 3000
     && (!value.materials || (Array.isArray(value.materials) && value.materials.length <= 30 && value.materials.every(x => typeof x === 'string' && x.length <= 80)))
@@ -52,18 +51,6 @@ function valid(body: unknown): body is Input {
     && (value.beforeImage === undefined || validImage(value.beforeImage))
     && (value.afterImage === undefined || validImage(value.afterImage))
     && (value.roughNotes.trim().length > 0 || value.beforeImage !== undefined || value.afterImage !== undefined);
-}
-
-async function isPro(appUserId: string): Promise<boolean> {
-  const secret = process.env.REVENUECAT_SECRET_API_KEY;
-  if (!secret) return false;
-  try {
-    const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(appUserId)}`, { headers: { Authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(4000) });
-    if (!response.ok) return false;
-    const data = await response.json() as { subscriber?: { entitlements?: { pro?: { expires_date?: string | null } } } };
-    const entitlement = data.subscriber?.entitlements?.pro;
-    return !!entitlement && (!entitlement.expires_date || Date.parse(entitlement.expires_date) > Date.now());
-  } catch { return false; }
 }
 
 async function allowedIP(ipKey: string): Promise<boolean> {
@@ -86,7 +73,7 @@ async function allowedIP(ipKey: string): Promise<boolean> {
   return state.minuteCount <= 30 && state.dayCount <= 100;
 }
 
-async function allowed(key: string, accessId: string, appUserId: string): Promise<boolean> {
+async function allowed(key: string, access: AccessIdentity): Promise<boolean> {
   const now = Date.now();
   const minute = Math.floor(now / 60000), day = Math.floor(now / 86400000);
   const month = new Date(now).getUTCFullYear() * 12 + new Date(now).getUTCMonth();
@@ -105,19 +92,19 @@ async function allowed(key: string, accessId: string, appUserId: string): Promis
     }
     const global = await redis([['INCR', `fixrecord:global:${day}`], ['EXPIRE', `fixrecord:global:${day}`, 172800]]);
     if ((global?.[0]?.result ?? 1001) > 1000) return false;
-    const monthlyLimit = await isPro(appUserId) ? 30 : 3;
-    const usage = await redis([['INCR', `fixrecord:requests:${month}:${accessId}`], ['EXPIRE', `fixrecord:requests:${month}:${accessId}`, 2678400]]);
+    const monthlyLimit = access.isPro ? 30 : 3;
+    const usage = await redis([['INCR', `fixrecord:requests:${month}:${access.id}`], ['EXPIRE', `fixrecord:requests:${month}:${access.id}`, 2678400]]);
     return (usage[0]?.result ?? monthlyLimit + 1) <= monthlyLimit;
   }
   if (process.env.VERCEL) return false;
-  const state = memory.get(accessId) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
+  const state = memory.get(access.id) ?? { minute, day, month, minuteCount: 0, dayCount: 0, monthlyCount: 0 };
   if (state.minute !== minute) { state.minute = minute; state.minuteCount = 0; }
   if (state.day !== day) { state.day = day; state.dayCount = 0; }
   if (state.month !== month) { state.month = month; state.monthlyCount = 0; }
   state.minuteCount++; state.dayCount++; state.monthlyCount++;
-  memory.set(accessId, state);
+  memory.set(access.id, state);
   if (state.minuteCount > 6 || state.dayCount > 100) return false;
-  return state.monthlyCount <= (await isPro(appUserId) ? 30 : 3);
+  return state.monthlyCount <= (access.isPro ? 30 : 3);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -129,8 +116,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const ipKey = createHash('sha256').update(ip).digest('hex');
   try { if (!(await allowedIP(ipKey))) return res.status(429).json({ error: 'AI limit reached' }); }
   catch { return res.status(503).json({ error: 'Usage service unavailable' }); }
-  const accessId = accessIdentity(req);
-  if (!accessId) return res.status(401).json({ error: 'AI access code required' });
+  const access = accessIdentity(req);
+  if (!access) return res.status(401).json({ error: 'AI access code required' });
   if (!valid(req.body)) return res.status(400).json({ error: 'Invalid job facts' });
   const input = req.body;
   let beforeImage: string | undefined, afterImage: string | undefined;
@@ -138,8 +125,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     beforeImage = await normaliseImage(input.beforeImage);
     afterImage = await normaliseImage(input.afterImage);
   } catch { return res.status(400).json({ error: 'Invalid job photo' }); }
-  const key = `${accessId}:${ipKey}`;
-  try { if (!(await allowed(key, accessId, input.revenueCatAppUserId))) return res.status(429).json({ error: 'AI limit reached' }); }
+  const key = `${access.id}:${ipKey}`;
+  try { if (!(await allowed(key, access))) return res.status(429).json({ error: 'AI limit reached' }); }
   catch { return res.status(503).json({ error: 'Usage service unavailable' }); }
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 16000);
   try {

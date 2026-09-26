@@ -11,10 +11,10 @@ before(() => {
   delete process.env.VERCEL;
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
-  delete process.env.REVENUECAT_SECRET_API_KEY;
   delete process.env.OPENAI_MODEL;
   process.env.OPENAI_API_KEY = 'test-only-key';
   process.env.AI_ACCESS_CODES = 'test-code-12345678901234567890';
+  delete process.env.AI_PRO_ACCESS_CODES;
 });
 
 after(() => {
@@ -26,7 +26,6 @@ function request(overrides = {}) {
   return {
     method: 'POST', headers: { 'x-fixrecord-access-code': 'test-code-12345678901234567890' }, socket: { remoteAddress: '127.0.0.1' },
     body: {
-      installId: crypto.randomUUID(), jobId: crypto.randomUUID(),
       jobTitle: 'Kitchen Sink Repair', issueDescription: 'A leaking connection',
       roughNotes: '', materials: [], locale: 'en-ZA',
       ...overrides
@@ -42,15 +41,15 @@ function response() {
   };
 }
 
-function freshAccessCode() {
+function freshAccessCode(pro = false) {
   const code = `test-${crypto.randomUUID()}`;
-  process.env.AI_ACCESS_CODES += `,${code}`;
+  if (pro) process.env.AI_PRO_ACCESS_CODES = [process.env.AI_PRO_ACCESS_CODES, code].filter(Boolean).join(',');
+  else process.env.AI_ACCESS_CODES += `,${code}`;
   return code;
 }
 
-test('Luna request includes labelled photos and keeps job identifiers out of model input', async () => {
+test('Luna request includes labelled photos and keeps the access code out of model input', async () => {
   const req = request({ beforeImage: jpeg, afterImage: jpeg });
-  req.body.revenueCatAppUserId = req.body.installId;
   const res = response();
   let upstream;
   globalThis.fetch = async (url, options) => {
@@ -74,15 +73,13 @@ test('Luna request includes labelled photos and keeps job identifiers out of mod
     const bytes = Buffer.from(part.image_url.split(',')[1], 'base64');
     assert.equal((await sharp(bytes).metadata()).format, 'jpeg');
   }
-  assert.ok(!JSON.stringify(upstream).includes(req.body.installId));
-  assert.ok(!JSON.stringify(upstream).includes(req.body.jobId));
+  assert.ok(!JSON.stringify(upstream).includes(req.headers['x-fixrecord-access-code']));
 });
 
 test('rejects requests with no work evidence or invalid image data before spending quota', async () => {
   globalThis.fetch = async () => { throw new Error('invalid inputs must not reach the model'); };
   for (const overrides of [{}, { beforeImage: Buffer.from('not a jpeg').toString('base64') }, { beforeImage: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') }]) {
     const req = request(overrides);
-    req.body.revenueCatAppUserId = req.body.installId;
     const res = response();
     await handler(req, res);
     assert.equal(res.statusCode, 400);
@@ -93,7 +90,6 @@ test('limits an IP before decoding another photo', async () => {
   for (let count = 0; count < 31; count++) {
     const req = request({ beforeImage: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') });
     req.socket.remoteAddress = '192.0.2.77';
-    req.body.revenueCatAppUserId = req.body.installId;
     const res = response();
     await handler(req, res);
     assert.equal(res.statusCode, count < 30 ? 400 : 429);
@@ -102,7 +98,6 @@ test('limits an IP before decoding another photo', async () => {
 
 test('returns a setup error without an API key and rejects incomplete model output', async () => {
   const req = request({ roughNotes: 'Replaced the washer.' });
-  req.body.revenueCatAppUserId = req.body.installId;
   delete process.env.OPENAI_API_KEY;
   const missing = response();
   await handler(req, missing);
@@ -117,7 +112,6 @@ test('returns a setup error without an API key and rejects incomplete model outp
 test('Free allows three AI requests per month, including retries on one job', async () => {
   const req = request({ roughNotes: 'Replaced the washer.' });
   req.headers['x-fixrecord-access-code'] = freshAccessCode();
-  req.body.revenueCatAppUserId = req.body.installId;
   req.socket.remoteAddress = '192.0.2.78';
   let modelCalls = 0;
   globalThis.fetch = async () => {
@@ -132,7 +126,7 @@ test('Free allows three AI requests per month, including retries on one job', as
   assert.equal(modelCalls, 3);
 });
 
-test('one access code cannot reset its monthly limit by changing installation IDs', async () => {
+test('a Free access code cannot reset its limit or claim Pro by changing client IDs', async () => {
   const code = freshAccessCode();
   let modelCalls = 0;
   globalThis.fetch = async () => {
@@ -142,7 +136,8 @@ test('one access code cannot reset its monthly limit by changing installation ID
   for (let count = 1; count <= 4; count++) {
     const req = request({ roughNotes: 'Replaced the washer.' });
     req.headers['x-fixrecord-access-code'] = code;
-    req.body.revenueCatAppUserId = req.body.installId;
+    req.body.installId = crypto.randomUUID();
+    req.body.revenueCatAppUserId = 'claimed-pro-id';
     req.socket.remoteAddress = '192.0.2.81';
     const res = response();
     await handler(req, res);
@@ -155,7 +150,6 @@ test('missing or unknown access codes never call OpenAI', async () => {
   globalThis.fetch = async () => { throw new Error('unauthorised request reached a service'); };
   for (const code of [undefined, 'unknown-code-12345678901234567890']) {
     const req = request({ roughNotes: 'Replaced the washer.' });
-    req.body.revenueCatAppUserId = req.body.installId;
     req.socket.remoteAddress = '192.0.2.82';
     if (code === undefined) delete req.headers['x-fixrecord-access-code'];
     else req.headers['x-fixrecord-access-code'] = code;
@@ -173,7 +167,6 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
   const req = request({ roughNotes: 'Replaced the washer.' });
   req.headers['x-fixrecord-access-code'] = freshAccessCode();
   req.headers['x-vercel-forwarded-for'] = '192.0.2.80';
-  req.body.revenueCatAppUserId = req.body.installId;
   let modelCalls = 0;
   globalThis.fetch = async (url, options) => {
     if (url === 'https://example.upstash.io/pipeline') {
@@ -205,19 +198,16 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
   }
 });
 
-test('verified Pro allows thirty AI requests per month', async () => {
+test('a server-issued Pro access code allows thirty AI requests per month', async () => {
   const originalNow = Date.now;
   const start = originalNow();
   let minute = 0;
   Date.now = () => start + minute * 60_000;
   const req = request({ roughNotes: 'Replaced the washer.' });
-  req.headers['x-fixrecord-access-code'] = freshAccessCode();
-  req.body.revenueCatAppUserId = req.body.installId;
+  req.headers['x-fixrecord-access-code'] = freshAccessCode(true);
   req.socket.remoteAddress = '192.0.2.79';
-  process.env.REVENUECAT_SECRET_API_KEY = 'test-only-revenuecat-key';
   let modelCalls = 0;
   globalThis.fetch = async url => {
-    if (url.startsWith('https://api.revenuecat.com/')) return new Response(JSON.stringify({ subscriber: { entitlements: { pro: { expires_date: null } } } }), { status: 200 });
     modelCalls++;
     return new Response(JSON.stringify({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify({ reportedIssue: '', workCompleted: '', completionNotes: '', professionalSummary: 'Washer replaced.' }) }] }] }), { status: 200 });
   };
@@ -231,6 +221,5 @@ test('verified Pro allows thirty AI requests per month', async () => {
     assert.equal(modelCalls, 30);
   } finally {
     Date.now = originalNow;
-    delete process.env.REVENUECAT_SECRET_API_KEY;
   }
 });

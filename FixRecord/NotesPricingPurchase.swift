@@ -113,11 +113,7 @@ enum AIService {
         var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 25
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accessCode, forHTTPHeaderField: "X-FixRecord-Access-Code")
-        let installID: String = {
-            if let id = UserDefaults.standard.string(forKey: "installID") { return id }
-            let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "installID"); return id
-        }()
-        var body: [String: Any] = ["installId": installID, "jobId": job.id.uuidString, "revenueCatAppUserId": installID, "jobTitle": clipped(job.title, maxUTF16Units: 150), "issueDescription": clipped(job.issue, maxUTF16Units: 1000), "roughNotes": clipped(job.roughNote, maxUTF16Units: 3000), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { clipped($0.name, maxUTF16Units: 80) }, "locale": clipped(Locale.current.identifier, maxUTF16Units: 40)]
+        var body: [String: Any] = ["jobTitle": clipped(job.title, maxUTF16Units: 150), "issueDescription": clipped(job.issue, maxUTF16Units: 1000), "roughNotes": clipped(job.roughNote, maxUTF16Units: 3000), "materials": job.items.filter { $0.kind == .material }.prefix(30).map { clipped($0.name, maxUTF16Units: 80) }, "locale": clipped(Locale.current.identifier, maxUTF16Units: 40)]
         if let beforeImage { body["beforeImage"] = beforeImage }
         if let afterImage { body["afterImage"] = afterImage }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -267,7 +263,7 @@ struct UpgradeView: View {
                     Label("Remove FixRecord branding", systemImage: "checkmark.circle.fill")
                     Label("Add your business logo", systemImage: "checkmark.circle.fill")
                     Label("Choose premium templates", systemImage: "checkmark.circle.fill")
-                    Label("30 AI requests per month (Free: 3)", systemImage: "checkmark.circle.fill")
+                    Label("Pro demo code: 30 AI requests/month (Free: 3)", systemImage: "checkmark.circle.fill")
                 }.font(.subheadline).foregroundStyle(Brand.navy).padding(20).frame(maxWidth: .infinity, alignment: .leading)
                     .background(.white, in: RoundedRectangle(cornerRadius: 16))
                 if !service.isPro {
