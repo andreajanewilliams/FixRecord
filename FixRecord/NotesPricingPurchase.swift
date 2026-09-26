@@ -60,6 +60,24 @@ enum AIService {
         endpointURL(from: (Bundle.main.object(forInfoDictionaryKey: "AI_ENDPOINT") as? String) ?? "")
     }
     static var isConfigured: Bool { endpointURL != nil }
+    static func validateAccessCode(_ code: String) async throws {
+        guard let url = endpointURL else { throw Failure.notConfigured }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(code.trimmingCharacters(in: .whitespacesAndNewlines), forHTTPHeaderField: "X-FixRecord-Access-Code")
+        // The server checks the code before job facts. An empty body returns 400 for an
+        // accepted code, without calling the model or using the AI request allowance.
+        request.httpBody = Data("{}".utf8)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw Failure.unavailable }
+        switch http.statusCode {
+        case 400: return
+        case 401: throw Failure.accessCodeRequired
+        default: throw Failure.unavailable
+        }
+    }
     static func clipped(_ value: String, maxUTF16Units: Int) -> String {
         var result = ""
         var remaining = maxUTF16Units
@@ -178,9 +196,9 @@ struct NotesView: View {
                         codeRejected = false
                         message = ""
                         Task { await improve() }
-                    })
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { showingAccessCode = false } } }
+                    }, onCancel: { showingAccessCode = false })
                 }
+                .interactiveDismissDisabled()
             }
     }
     private func requestImprovement() {

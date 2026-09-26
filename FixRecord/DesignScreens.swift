@@ -288,34 +288,45 @@ struct SettingsView: View {
 struct AIAccessCodeView: View {
     var warning: String? = nil
     var onSaved: (() -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
     @State private var code = ""
     @State private var saved = false
     @State private var message = ""
+    @State private var messageIsError = false
+    @State private var checking = false
+    @State private var checkTask: Task<Void, Never>?
+    @State private var checkID = UUID()
     var body: some View {
         Form {
             Section {
-                if let warning { Label(warning, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(.orange) }
+                if let warning, message.isEmpty { Label(warning, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(.orange) }
                 SecureField("Access code", text: $code)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                if saved { Button("Remove Code", role: .destructive) { AIAccessCodeStore.remove(); saved = false; message = "Code removed." } }
+                if saved { Button("Remove Code", role: .destructive) { cancelCheck(); AIAccessCodeStore.remove(); saved = false; messageIsError = false; message = "Code removed." } }
             } footer: {
                 Text("Enter the judging code from the submission notes. Can’t find it? [Email Andrea](mailto:andreajanewilliams2@gmail.com)")
             }
-            if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
+            if !message.isEmpty {
+                Section {
+                    if messageIsError { Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                    else { Text(message).foregroundStyle(.secondary) }
+                }
+            }
         }
         .navigationTitle("AI Access Code")
+        .toolbar {
+            if let onCancel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") { cancelCheck(); onCancel() }
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             Button {
-                let didSave = AIAccessCodeStore.save(code)
-                saved = AIAccessCodeStore.load() != nil
-                message = didSave ? "Code saved on this device." : "Enter the full access code supplied for the demo."
-                if didSave {
-                    code = ""
-                    onSaved?()
-                }
+                checkTask = Task { await saveCode() }
             } label: {
-                Label("Save code", systemImage: "checkmark")
+                Label(checking ? "Checking code…" : "Save code", systemImage: checking ? "hourglass" : "checkmark")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(14)
@@ -323,12 +334,53 @@ struct AIAccessCodeView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray : Brand.blue, in: RoundedRectangle(cornerRadius: 13))
-            .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(checking || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .background(Brand.background)
         }
         .onAppear { saved = AIAccessCodeStore.load() != nil }
+        .onDisappear { cancelCheck() }
+    }
+    private func cancelCheck() {
+        checkID = UUID()
+        checkTask?.cancel()
+        checkTask = nil
+        checking = false
+    }
+    private func saveCode() async {
+        let candidate = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (20...128).contains(candidate.count) else {
+            messageIsError = true
+            message = "Enter the full access code supplied for the demo."
+            return
+        }
+        let currentCheckID = UUID()
+        checkID = currentCheckID
+        checking = true
+        defer { checking = false }
+        do {
+            try await AIService.validateAccessCode(candidate)
+            guard checkID == currentCheckID, !Task.isCancelled else { return }
+            guard AIAccessCodeStore.save(candidate) else {
+                messageIsError = true
+                message = "Could not save the code. Please try again."
+                return
+            }
+            saved = true
+            code = ""
+            messageIsError = false
+            message = "Code ready for AI."
+            onSaved?()
+        } catch AIService.Failure.accessCodeRequired {
+            guard checkID == currentCheckID, !Task.isCancelled else { return }
+            messageIsError = true
+            message = "Code not recognised. Check it and try again."
+        } catch {
+            guard checkID == currentCheckID, !Task.isCancelled else { return }
+            messageIsError = true
+            message = "Could not check the code right now. Please try again."
+        }
     }
 }
 

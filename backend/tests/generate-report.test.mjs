@@ -163,6 +163,24 @@ test('missing or unknown access codes never call OpenAI', async () => {
   }
 });
 
+test('code check distinguishes accepted and unknown codes without using an AI request', async () => {
+  globalThis.fetch = async () => { throw new Error('code check must not reach the model'); };
+  const accepted = request();
+  accepted.socket.remoteAddress = '192.0.2.83';
+  accepted.body = {};
+  const acceptedResponse = response();
+  await handler(accepted, acceptedResponse);
+  assert.equal(acceptedResponse.statusCode, 400);
+
+  const unknown = request();
+  unknown.socket.remoteAddress = '192.0.2.84';
+  unknown.headers['x-fixrecord-access-code'] = 'unknown-code-12345678901234567890';
+  unknown.body = {};
+  const unknownResponse = response();
+  await handler(unknown, unknownResponse);
+  assert.equal(unknownResponse.statusCode, 401);
+});
+
 test('hosted Redis quota blocks a fourth Free request before OpenAI is called', async () => {
   process.env.VERCEL = '1';
   process.env.UPSTASH_REDIS_REST_KV_REST_API_URL = 'https://example.upstash.io';
