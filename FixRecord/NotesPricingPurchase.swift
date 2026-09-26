@@ -187,7 +187,6 @@ struct PricingView: View {
     private var valid: Bool { Money.isValid(job.discount) && Money.isValid(job.taxRate) && job.items.allSatisfy { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && Money.isValid($0.quantity) && Money.isValid($0.unitPrice) } }
     var body: some View {
         Form {
-            Section { Text(job.title).font(.headline); Text(job.number).font(.caption).foregroundStyle(.secondary) }
             itemSection("Materials", kind: .material)
             itemSection("Labour", kind: .labour)
             itemSection("Additional charges", kind: .charge)
