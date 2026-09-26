@@ -163,8 +163,8 @@ test('missing or unknown access codes never call OpenAI', async () => {
 
 test('hosted Redis quota blocks a fourth Free request before OpenAI is called', async () => {
   process.env.VERCEL = '1';
-  process.env.UPSTASH_REDIS_REST_URL = 'https://example.upstash.io';
-  process.env.UPSTASH_REDIS_REST_TOKEN = 'test-only-token';
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_URL = 'https://example.upstash.io';
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN = 'test-only-token';
   const counters = new Map();
   const req = request({ roughNotes: 'Replaced the washer.' });
   req.headers['x-fixrecord-access-code'] = freshAccessCode();
@@ -172,6 +172,7 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
   let modelCalls = 0;
   globalThis.fetch = async (url, options) => {
     if (url === 'https://example.upstash.io/pipeline') {
+      assert.equal(options.headers.Authorization, 'Bearer test-only-token');
       const commands = JSON.parse(options.body);
       return new Response(JSON.stringify(commands.map(([command, key, ...args]) => {
         if (command === 'EVAL') {
@@ -218,8 +219,28 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
     assert.equal(counters.get('fixrecord:judging-total'), 600);
   } finally {
     delete process.env.VERCEL;
+    delete process.env.UPSTASH_REDIS_REST_KV_REST_API_URL;
+    delete process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN;
+  }
+});
+
+test('hosted quota fails closed when an integration credential is missing', async () => {
+  process.env.VERCEL = '1';
+  process.env.UPSTASH_REDIS_REST_URL = 'https://legacy.upstash.io';
+  process.env.UPSTASH_REDIS_REST_TOKEN = 'legacy-token';
+  process.env.UPSTASH_REDIS_REST_KV_REST_API_URL = 'https://integration.upstash.io';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('No request should be sent with mismatched Redis credentials'); };
+  try {
+    const res = response();
+    await handler(request({ roughNotes: 'Replaced the washer.' }), res);
+    assert.equal(res.statusCode, 503);
+  } finally {
+    delete process.env.VERCEL;
     delete process.env.UPSTASH_REDIS_REST_URL;
     delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_KV_REST_API_URL;
+    globalThis.fetch = originalFetch;
   }
 });
 

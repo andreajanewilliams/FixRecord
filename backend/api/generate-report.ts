@@ -55,10 +55,20 @@ function valid(body: unknown): body is Input {
     && (value.roughNotes.trim().length > 0 || value.beforeImage !== undefined || value.afterImage !== undefined);
 }
 
+function redisCredentials(): { url: string; token: string } | undefined {
+  const integrationURL = process.env.UPSTASH_REDIS_REST_KV_REST_API_URL;
+  const integrationToken = process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN;
+  const hasIntegrationConfig = Boolean(integrationURL || integrationToken);
+  const url = hasIntegrationConfig ? integrationURL : process.env.UPSTASH_REDIS_REST_URL;
+  const token = hasIntegrationConfig ? integrationToken : process.env.UPSTASH_REDIS_REST_TOKEN;
+  return url && token ? { url, token } : undefined;
+}
+
 async function allowedIP(ipKey: string): Promise<boolean> {
   const minute = Math.floor(Date.now() / 60000), day = Math.floor(Date.now() / 86400000);
-  const url = process.env.UPSTASH_REDIS_REST_URL, token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (url && token) {
+  const credentials = redisCredentials();
+  if (credentials) {
+    const { url, token } = credentials;
     for (const [bucket, max, ttl] of [[`ip-minute:${minute}`, 30, 120], [`ip-day:${day}`, 100, 172800]] as const) {
       const response = await fetch(`${url}/pipeline`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify([['INCR', `fixrecord:${bucket}:${ipKey}`], ['EXPIRE', `fixrecord:${bucket}:${ipKey}`, ttl]]) });
       if (!response.ok) throw new Error('Usage service unavailable');
@@ -80,8 +90,9 @@ async function allowed(key: string, installId: string, access: AccessIdentity): 
   const minute = Math.floor(now / 60000), day = Math.floor(now / 86400000);
   const month = new Date(now).getUTCFullYear() * 12 + new Date(now).getUTCMonth();
   // Production deployments must configure a shared Redis endpoint: per-instance memory is not a safe global limit.
-  const url = process.env.UPSTASH_REDIS_REST_URL, token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (url && token) {
+  const credentials = redisCredentials();
+  if (credentials) {
+    const { url, token } = credentials;
     const redis = async (commands: (string | number)[][]) => {
       const response = await fetch(`${url}/pipeline`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(commands) });
       if (!response.ok) throw new Error('Usage service unavailable');
