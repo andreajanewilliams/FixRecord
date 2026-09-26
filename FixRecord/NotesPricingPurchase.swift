@@ -316,49 +316,145 @@ struct PricingView: View {
 
 struct UpgradeView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @StateObject private var service = EntitlementService.shared
+    @State private var busy = false
+    @State private var loading = true
+    @State private var managementMessage: String?
+    private var isTestStore: Bool {
+        ((Bundle.main.object(forInfoDictionaryKey: "REVENUECAT_API_KEY") as? String) ?? "").hasPrefix("test_")
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(spacing: 9) {
-                    Image(systemName: service.isPro ? "checkmark.seal.fill" : "star.square.fill").font(.system(size: 48)).foregroundStyle(Brand.blue)
-                    Text(service.isPro ? "FixRecord Pro is active" : "Upgrade to FixRecord Pro").font(.title.bold()).multilineTextAlignment(.center)
-                    Text("Make every document your business's own.").multilineTextAlignment(.center).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity).padding(.top, 28)
-                VStack(alignment: .leading, spacing: 16) {
-                    Label("Combine report and invoice in a Client Pack", systemImage: "checkmark.circle.fill")
-                    Label("Remove FixRecord branding", systemImage: "checkmark.circle.fill")
-                    Label("Add your business logo", systemImage: "checkmark.circle.fill")
-                    Label("Choose premium templates", systemImage: "checkmark.circle.fill")
-                    Label("Pro demo code: 30 AI requests/month (Free: 3)", systemImage: "checkmark.circle.fill")
-                }.font(.subheadline).foregroundStyle(Brand.navy).padding(20).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 16))
-                Label {
-                    Text("If Pro ends, your jobs and settings stay saved. New PDFs use Modern with FixRecord branding and no custom logo until Pro is active again.")
-                } icon: {
-                    Image(systemName: "info.circle")
+            VStack(spacing: 20) {
+                HStack(spacing: 14) {
+                    Image(systemName: service.isPro ? "checkmark.seal.fill" : "sparkles")
+                        .font(.system(size: 30)).foregroundStyle(Brand.blue)
+                        .frame(width: 60, height: 60).background(Brand.pale, in: RoundedRectangle(cornerRadius: 18))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("FixRecord Pro").font(.title2.bold()).foregroundStyle(Brand.navy)
+                        Text(service.isPro ? "Your professional toolkit" : "Make every document your own")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
-                if !service.isPro {
+                .padding(.top, 12)
+
+                if service.isPro {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text(isTestStore ? "Pro active · Test Store" : "Pro active")
+                    }.font(.caption.weight(.semibold)).foregroundStyle(Brand.teal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                VStack(spacing: 0) {
+                    benefit("Client Packs", detail: "Report and invoice, together", icon: "doc.on.doc")
+                    Divider().padding(.leading, 58)
+                    benefit("Premium templates", detail: "A style for every business", icon: "doc.richtext")
+                    Divider().padding(.leading, 58)
+                    benefit("Your own branding", detail: "Add your logo. Hide FixRecord's.", icon: "paintbrush.pointed")
+                }
+                .background(.white, in: RoundedRectangle(cornerRadius: 20))
+
+                if service.isPro {
+                    PrimaryButton(title: busy ? "Opening…" : "Manage Subscription", icon: "slider.horizontal.3") {
+                        Task { await manageSubscription() }
+                    }.disabled(busy)
+                } else if loading {
+                    ProgressView("Loading plans…").font(.subheadline).padding()
+                } else {
                     ForEach(service.packages, id: \.identifier) { package in
-                        Button { Task { await service.purchase(package) } } label: {
-                            HStack { Text(package.storeProduct.localizedTitle); Spacer(); Text(package.storeProduct.localizedPriceString) }
-                                .font(.headline).frame(maxWidth: .infinity).padding(15).foregroundStyle(.white).background(Brand.blue, in: RoundedRectangle(cornerRadius: 12))
-                        }
+                        Button {
+                            Task {
+                                busy = true
+                                await service.purchase(package)
+                                busy = false
+                            }
+                        } label: {
+                            HStack {
+                                Text(package.storeProduct.localizedTitle)
+                                Spacer()
+                                Text(package.storeProduct.localizedPriceString)
+                            }.font(.headline).padding(16).foregroundStyle(.white)
+                                .background(Brand.blue, in: RoundedRectangle(cornerRadius: 14))
+                        }.disabled(busy)
                     }
                     if service.packages.isEmpty {
-                        Text(service.configured ? "Pro plans are unavailable right now." : "Pro purchases aren't enabled in this test build.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text(service.configured ? "Plans are unavailable. Please try again later." : "Purchases aren't enabled in this build.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-                Button("Restore Purchases") { Task { await service.restore() } }.disabled(!service.configured).frame(maxWidth: .infinity)
-                if !service.message.isEmpty { Text(service.message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity) }
+
+                VStack(spacing: 14) {
+                    Button {
+                        Task {
+                            busy = true
+                            await service.restore()
+                            busy = false
+                        }
+                    } label: {
+                        Label("Restore Purchases", systemImage: "arrow.clockwise")
+                            .font(.subheadline.weight(.medium)).frame(minHeight: 44)
+                    }.disabled(!service.configured || busy)
+                    if !service.message.isEmpty {
+                        Text(service.message).font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    DisclosureGroup("If Pro ends") {
+                        Text("Your jobs and saved PDFs stay yours. New exports use Modern with FixRecord branding and no custom logo until Pro is active again.")
+                            .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
+                    }
+                    DisclosureGroup("AI demo allowance") {
+                        Text("A Pro demo code includes 30 AI requests per month; a Free code includes 3. Enter the code separately when using AI.")
+                            .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
+                    }
+                }.font(.subheadline).tint(Brand.blue).padding(16)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 16))
             }.padding(20)
         }.background(Brand.background).navigationTitle("FixRecord Pro").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .task { await service.refresh() }
+            .task { await service.refresh(); loading = false }
+            .alert("Manage subscription", isPresented: Binding(get: { managementMessage != nil }, set: { if !$0 { managementMessage = nil } })) {
+                Button("OK", role: .cancel) { managementMessage = nil }
+            } message: { Text(managementMessage ?? "") }
+    }
+
+    private func benefit(_ title: String, detail: String, icon: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.title3).foregroundStyle(Brand.blue).frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Brand.navy)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }.padding(16)
+    }
+
+    @MainActor private func manageSubscription() async {
+        if isTestStore {
+            managementMessage = "This is a free Test Store subscription. There is no Apple payment to manage or cancel. App Store subscriptions will open Apple's subscription settings here."
+            return
+        }
+        guard service.configured else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let info = try await Purchases.shared.customerInfo()
+            guard let url = info.managementURL else {
+                managementMessage = "No store subscription is available to manage for this account."
+                return
+            }
+            openURL(url) { accepted in
+                if !accepted { managementMessage = "Subscription settings could not be opened. Please try again." }
+            }
+        } catch {
+            managementMessage = "Subscription settings are unavailable. Please check your connection and try again."
+        }
     }
 }
 
