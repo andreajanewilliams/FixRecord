@@ -333,6 +333,14 @@ struct UpgradeView: View {
                     Label("Pro demo code: 30 AI requests/month (Free: 3)", systemImage: "checkmark.circle.fill")
                 }.font(.subheadline).foregroundStyle(Brand.navy).padding(20).frame(maxWidth: .infinity, alignment: .leading)
                     .background(.white, in: RoundedRectangle(cornerRadius: 16))
+                Label {
+                    Text("If Pro ends, your jobs and settings stay saved. New PDFs use Modern with FixRecord branding and no custom logo until Pro is active again.")
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
                 if !service.isPro {
                     ForEach(service.packages, id: \.identifier) { package in
                         Button { Task { await service.purchase(package) } } label: {
