@@ -11,6 +11,8 @@ before(() => {
   delete process.env.VERCEL;
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  delete process.env.UPSTASH_REDIS_REST_KV_REST_API_URL;
+  delete process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN;
   delete process.env.OPENAI_MODEL;
   process.env.OPENAI_API_KEY = 'test-only-key';
   process.env.AI_ACCESS_CODES = 'test-code-12345678901234567890';
