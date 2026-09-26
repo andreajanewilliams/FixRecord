@@ -200,11 +200,34 @@ struct PricingView: View {
     private func itemSection(_ title: String, kind: PriceItem.Kind) -> some View {
         Section(title) {
             ForEach(job.items.filter { $0.kind == kind }) { item in
-                VStack(alignment: .leading, spacing: 7) {
-                    TextField("Description", text: itemBinding(item.id, \.name))
-                    HStack { TextField(kind == .labour ? "Hours" : "Qty", text: itemBinding(item.id, \.quantity)).keyboardType(.decimalPad).frame(width: 75); Text("×"); TextField(kind == .labour ? "Hourly rate" : "Unit price", text: itemBinding(item.id, \.unitPrice)).keyboardType(.decimalPad).frame(width: 110); Spacer(); Text(Money.format(item.total, currency: job.currencyCode)).font(.caption.bold()) }
-                    Button("Remove", role: .destructive) { var items = job.items; items.removeAll { $0.id == item.id }; job.items = items }.font(.caption)
-                }.padding(.vertical, 3)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        TextField("Description", text: itemBinding(item.id, \.name))
+                        Button(role: .destructive) {
+                            var items = job.items
+                            items.removeAll { $0.id == item.id }
+                            job.items = items
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.subheadline)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Remove \(item.name.isEmpty ? kind.rawValue : item.name)")
+                    }
+                    HStack {
+                        TextField(kind == .labour ? "Hours" : "Qty", text: itemBinding(item.id, \.quantity))
+                            .keyboardType(.decimalPad).frame(width: 75)
+                        Text("×").foregroundStyle(.secondary)
+                        TextField(kind == .labour ? "Hourly rate" : "Unit price", text: itemBinding(item.id, \.unitPrice))
+                            .keyboardType(.decimalPad).frame(width: 110)
+                        Spacer()
+                        Text(Money.format(item.total, currency: job.currencyCode)).font(.caption.bold())
+                    }
+                }
+                .padding(.vertical, 2)
             }
             Button { var items = job.items; items.append(PriceItem(kind: kind, name: "", unitPrice: "0")); job.items = items } label: { Label("Add \(kind.rawValue.capitalized)", systemImage: "plus") }
             if kind == .material {
