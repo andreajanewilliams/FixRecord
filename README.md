@@ -4,6 +4,8 @@
 
 **Capture. Create. Share.** A local-first iPhone app for documenting completed work and turning it into professional reports and invoices.
 
+<img src="docs/jobs-current.png" alt="FixRecord Jobs screen with the fictional Kitchen Sink Repair example" width="300">
+
 ## Start here
 
 - [Judge walkthrough and configuration](docs/JUDGING.md)

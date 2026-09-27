@@ -244,6 +244,19 @@ struct ReceiptRecord: Codable, Identifiable {
             if !preset.category.isEmpty { category = preset.category }
         }
     }
+    func documentPresetDraft(fallback profile: BusinessProfile?) -> SavedPreset {
+        var draft = documentPreset ?? SavedPreset.custom(profile: profile)
+        if documentPreset == nil, !businessName.isEmpty { draft.business.businessName = businessName }
+        // Pricing is authoritative when editing this job's document details.
+        draft.business.taxRate = taxRate
+        draft.business.currencyCode = currencyCode
+        draft.id = UUID()
+        draft.name = "Custom"
+        draft.technician = ""
+        draft.category = ""
+        return draft
+    }
+
     func setCurrency(_ code: String) {
         guard currencyCode != code else { return }
         currencyCode = code
@@ -298,7 +311,12 @@ struct ReceiptRecord: Codable, Identifiable {
 
 enum Money {
     static func decimal(_ value: String) -> Decimal? {
-        var normalised = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: " ", with: "")
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Decimal(string:) accepts numeric prefixes; validate the entire input first.
+        let numberPattern = #"^[+-]?(?:[0-9]+(?:[.,][0-9]+)?|[.,][0-9]+|[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]+|[0-9]{1,3}(?:[ \u00A0\u202F][0-9]{3})+(?:[.,][0-9]+)?)$"#
+        guard trimmed.range(of: numberPattern, options: .regularExpression) != nil else { return nil }
+        var normalised = trimmed.replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\u{00A0}", with: "").replacingOccurrences(of: "\u{202F}", with: "")
         if normalised.contains(",") && normalised.contains(".") {
             if normalised.lastIndex(of: ",")! > normalised.lastIndex(of: ".")! {
                 normalised = normalised.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")

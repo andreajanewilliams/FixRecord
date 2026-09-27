@@ -203,30 +203,20 @@ struct ExportView: View {
         .shadow(color: Brand.navy.opacity(0.04), radius: 10, y: 4)
     }
     private func presetDraft() -> SavedPreset {
-        var draft = job.documentPreset ?? SavedPreset.custom(profile: profile)
-        if job.documentPreset == nil {
-            if !job.businessName.isEmpty { draft.business.businessName = job.businessName }
-            draft.business.taxRate = job.taxRate
-        }
-        draft.business.currencyCode = job.currencyCode
-        draft.id = UUID()
-        draft.name = "Custom"
-        draft.technician = ""
-        draft.category = ""
-        return draft
+        job.documentPresetDraft(fallback: profile)
     }
+
     private func render() {
         guard kind != .pack || entitlements.isPro else { data = Data(); url = nil; return }
         do {
             let options = job.documentOptions
             let includePhotos = job.includePhotosInReport
             let business = job.documentProfile(fallback: profile)
-            data = try PDFMaker.make(kind: kind, job: job, profile: business, options: options, isPro: entitlements.isPro, includePhotos: includePhotos)
+            let documents = try PDFMaker.exportDocuments(kind: kind, job: job, profile: business,
+                                                        options: options, isPro: entitlements.isPro, includePhotos: includePhotos)
+            data = documents.document
             url = try exportURL(for: data, label: kind.rawValue)
-            if entitlements.isPro {
-                let pack = try PDFMaker.make(kind: .pack, job: job, profile: business, options: options, isPro: true, includePhotos: includePhotos)
-                packURL = try exportURL(for: pack, label: "Client Pack")
-            } else { packURL = nil }
+            packURL = documents.clientPack.flatMap { try? exportURL(for: $0, label: "Client Pack") }
             error = ""
         } catch { data = Data(); url = nil; packURL = nil; self.error = error.localizedDescription }
     }
@@ -265,6 +255,15 @@ enum PDFMaker {
     private static let green = UIColor(red: 0.07, green: 0.56, blue: 0.40, alpha: 1)
     private static let margin: CGFloat = 44
     private static let contentWidth: CGFloat = 507
+
+    static func exportDocuments(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions,
+                                isPro: Bool, includePhotos: Bool = true) throws -> (document: Data, clientPack: Data?) {
+        let document = try make(kind: kind, job: job, profile: profile, options: options, isPro: isPro, includePhotos: includePhotos)
+        // The optional combined download must not invalidate a usable report.
+        let pack = isPro ? (kind == .pack ? document : try? make(kind: .pack, job: job, profile: profile,
+                                                              options: options, isPro: true, includePhotos: includePhotos)) : nil
+        return (document, pack)
+    }
 
     static func make(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions = DocumentOptions(), isPro: Bool = false, includePhotos: Bool = true) throws -> Data {
         guard kind != .pack || isPro else {
@@ -452,13 +451,13 @@ enum PDFMaker {
 
     private static func textReportSection(_ title: String, symbol: String, value: String, y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
         let width = contentWidth - 29
-        let font = UIFont.systemFont(ofSize: 11)
-        let height = max(17, ceil(NSString(string: value).boundingRect(with: CGSize(width: width, height: 650), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil).height) + 4)
-        ensure(33 + height, y: &y, context: context, options: options)
+        ensure(55, y: &y, context: context, options: options)
         reportIcon(symbol, x: margin, y: y, size: 16)
         text(title, x: margin + 29, y: y, width: width, size: 12, bold: true, colour: navy)
-        text(value, x: margin + 29, y: y + 26, width: width, height: height, size: 11, colour: navy, wrap: true)
-        y += 34 + height
+        y += 26
+        paginatedText(value, x: margin + 29, width: width, size: 11, y: &y, context: context, options: options)
+        y += 8
+        ensure(17, y: &y, context: context, options: options)
         line(y); y += 16
     }
 
@@ -706,19 +705,27 @@ enum PDFMaker {
         text(title, x: margin, y: y, width: contentWidth, size: 10, bold: true, colour: navy); y += 18
     }
     private static func paragraph(_ value: String, y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
-        let words = value.split(separator: " ")
-        var chunks: [String] = []; var current = ""
-        for word in words {
-            if current.count + word.count > 450 && !current.isEmpty { chunks.append(current); current = "" }
-            current += (current.isEmpty ? "" : " ") + word
+        paginatedText(value, x: margin, width: contentWidth, size: 10, y: &y, context: context, options: options)
+        y += 8
+    }
+    private static func paginatedText(_ value: String, x: CGFloat, width: CGFloat, size: CGFloat,
+                                      y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
+        let storage = NSTextStorage(string: value, attributes: [.font: UIFont.systemFont(ofSize: size), .foregroundColor: navy])
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        layout.ensureLayout(for: container)
+        var lines: [(NSRange, CGRect)] = []
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { rect, _, _, range, _ in
+            lines.append((range, rect))
         }
-        if !current.isEmpty { chunks.append(current) }
-        for chunk in chunks {
-            let font = UIFont.systemFont(ofSize: 10)
-            let height = ceil(NSString(string: chunk).boundingRect(with: CGSize(width: contentWidth, height: 600), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil).height) + 5
-            ensure(height + 8, y: &y, context: context, options: options)
-            text(chunk, x: margin, y: y, width: contentWidth, height: height, size: 10, wrap: true)
-            y += height + 8
+        for (range, rect) in lines {
+            let height = ceil(rect.height)
+            ensure(height, y: &y, context: context, options: options)
+            layout.drawGlyphs(forGlyphRange: range, at: CGPoint(x: x, y: y - rect.minY))
+            y += height
         }
     }
     private static func tableHeader(y: inout CGFloat, template: DocumentTemplate) {

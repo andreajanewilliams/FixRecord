@@ -5,6 +5,64 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testEditingDocumentDetailsPreservesCurrentPricing() {
+        let job = SampleJob.make()
+        job.applyPreset(SavedPreset.custom(profile: nil), includeJobDefaults: false)
+        job.taxRate = "15"
+        let originalTotal = InvoiceTotals(items: job.items, discount: Money.parse(job.discount), taxRate: Money.parse(job.taxRate)).grandTotal
+        var draft = job.documentPresetDraft(fallback: nil)
+        draft.business.businessName = "Updated business"
+        job.applyPreset(draft, includeJobDefaults: false)
+        XCTAssertEqual(job.taxRate, "15")
+        XCTAssertEqual(job.businessName, "Updated business")
+        XCTAssertEqual(InvoiceTotals(items: job.items, discount: Money.parse(job.discount), taxRate: Money.parse(job.taxRate)).grandTotal, originalTotal)
+    }
+
+    func testProReportExportSurvivesUnfinishedInvoice() throws {
+        let job = SampleJob.make()
+        job.items.append(PriceItem(kind: .labour, name: "", unitPrice: "unfinished"))
+        let result = try PDFMaker.exportDocuments(kind: .report, job: job, profile: nil, options: DocumentOptions(), isPro: true)
+        XCTAssertNotNil(PDFDocument(data: result.document))
+        XCTAssertNil(result.clientPack)
+        XCTAssertThrowsError(try PDFMaker.exportDocuments(kind: .invoice, job: job, profile: nil, options: DocumentOptions(), isPro: true))
+        job.items.removeLast()
+        let valid = try PDFMaker.exportDocuments(kind: .report, job: job, profile: nil, options: DocumentOptions(), isPro: true)
+        XCTAssertNotNil(valid.clientPack)
+    }
+
+    func testLongReportNotesContinueAcrossPages() throws {
+        let job = SampleJob.make()
+        job.professionalNote = ""
+        job.roughNote = (1...150).map { "Work detail \($0): inspected the connection and recorded the result." }.joined(separator: "\n") + "\nFINAL SENTINEL REPAIR NOTE"
+        for includePhotos in [false, true] {
+            let pdf = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: DocumentOptions(), includePhotos: includePhotos)))
+            XCTAssertGreaterThan(pdf.pageCount, 1)
+            let text = pdf.string ?? ""
+            XCTAssertTrue(text.contains("Work detail 1:"))
+            XCTAssertTrue(text.contains("Work detail 75:"))
+            XCTAssertTrue(text.contains("Work detail 150:"))
+            XCTAssertTrue(text.contains("FINAL SENTINEL REPAIR NOTE"))
+        }
+    }
+
+    func testMalformedAmountsCannotBeConfirmedOrInvoiced() throws {
+        for invalid in ["12.3.4", "12oops", "1,23,456.78", "1 2", "1e3", "--2", "12.00\n3"] {
+            XCTAssertNil(Money.decimal(invalid), invalid)
+            XCTAssertFalse(Money.isValid(invalid), invalid)
+            let job = SampleJob.make()
+            for field in ["price", "quantity", "tax", "discount"] {
+                job.items = [PriceItem(kind: .material, name: "Part", quantity: field == "quantity" ? invalid : "1", unitPrice: field == "price" ? invalid : "5")]
+                job.taxRate = field == "tax" ? invalid : "0"
+                job.discount = field == "discount" ? invalid : "0"
+                XCTAssertThrowsError(try PDFMaker.make(kind: .invoice, job: job, profile: nil), "\(field): \(invalid)")
+                if field == "price" || field == "quantity" { XCTAssertFalse(ReceiptParser.canConfirm(job.items)) }
+            }
+        }
+        for valid in ["1,234.50", "1.234,50", "1 234,50", "1\u{202F}234.50", "0.99", ".99", "12,50"] {
+            XCTAssertTrue(Money.isValid(valid), valid)
+        }
+    }
+
     func testCustomJobReferencesAndAutomaticFallback() {
         XCTAssertEqual(JobReference.prefix(" JOB- "), "JOB")
         XCTAssertEqual(JobReference.prefix("  "), "FR")

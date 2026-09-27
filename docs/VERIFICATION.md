@@ -2,7 +2,7 @@
 
 ## Automated checks
 
-- `xcodebuild test -project FixRecord.xcodeproj -scheme FixRecord -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' CODE_SIGNING_ALLOWED=NO`: **69 passed, 0 failed, 0 skipped**, Xcode 26.3 / iOS 26.3.1 simulator.
+- `xcodebuild test -project FixRecord.xcodeproj -scheme FixRecord -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' CODE_SIGNING_ALLOWED=NO`: **73 passed, 0 failed, 0 skipped**, Xcode 26.3 / iOS 26.3.1 simulator.
 - In `backend/`, `npm run typecheck && npm test`: **passed**, 11 backend tests.
 - `git diff --check`: passed.
 
@@ -16,4 +16,6 @@ Existing demo footage predates recent UI changes. Record current footage before 
 
 ## Independent review
 
-A fresh Astra review is pending; this document does not claim a clean review until its outcome is recorded.
+A fresh, read-only Astra full review covered the app, backend and submission setup at `579560f`, against remote base `705da77`. It found four existing workflow defects: tax reset during document editing, report export coupled to an invalid optional invoice, long-note PDF overflow, and partial numeric parsing. All four were fixed with regression cases. Astra's targeted follow-up review found no remaining actionable findings or new regressions. No new security blocker was identified.
+
+The code-review outcome does not substitute for the remaining physical-device, current Test Store offering and final-media checks above.

@@ -22,8 +22,8 @@ The criteria focus on usefulness, demonstrated working functionality, thoughtful
 
 - Andrea confirms academic-email eligibility and entrant/team information; complete guardian consent if applicable.
 - Approve making the repository public and verify GitHub displays the licence.
-- Record/approve current demo footage. Existing recordings in ignored `submission/` are older drafts and should not represent the latest UI/pricing without review.
-- Approve/upload the final public video and current screenshots, then enter their URLs in Devpost.
+- Record/approve current demo footage using the [recording plan](DEMO.md). Existing recordings in ignored `submission/` are older drafts and should not represent the latest UI/pricing without review.
+- Approve/upload the final public video and current screenshots, then enter their URLs in Devpost. A current Jobs screenshot (1179 × 2556) and icon (1024 × 1024) are prepared locally in ignored `submission/`; they have not been uploaded.
 - Supply public SDK key and optional endpoint/code in private judge notes, never a server secret.
 - Recheck physical-camera auto-capture, dictation, receipt corrections and PDF sharing on the final build.
 - Recheck purchase, restore and trial eligibility against the new monthly/yearly products. Earlier successful purchase/restore checks used the previous offering.
