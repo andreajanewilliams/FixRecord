@@ -86,6 +86,9 @@ struct RootView: View {
                 Button("OK") { exampleError = nil }
             } message: { Text(exampleError ?? "") }
         }
+        .onChange(of: jobs.map { JobEditSnapshot($0) }) { previous, _ in
+            JobEditSnapshot.recordChanges(from: previous, in: jobs)
+        }
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-load-sample") && !jobs.contains(where: { $0.isSample }) {
                 context.insert(SampleJob.make())
@@ -99,11 +102,12 @@ struct HomeView: View {
     @State private var jobToDelete: Job?
     @State private var duplicateError: String?
     @State private var searchText = ""
+    @AppStorage("jobSortOrder") private var sortOrder: JobSortOrder = .recentlyUpdated
     let jobs: [Job]
     @Binding var newJob: Bool
     @Binding var selectedJob: Job?
     @Binding var filter: JobFilter
-    private var visibleJobs: [Job] { JobFilter.visible(jobs, status: filter, search: searchText) }
+    private var visibleJobs: [Job] { sortOrder.sorted(JobFilter.visible(jobs, status: filter, search: searchText)) }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -115,6 +119,13 @@ struct HomeView: View {
                 HStack {
                     Text("My Jobs").font(.largeTitle.bold()).foregroundStyle(Brand.navy)
                     Spacer()
+                    Menu {
+                        Picker("Sort jobs", selection: $sortOrder) {
+                            ForEach(JobSortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
+                    }.accessibilityLabel("Sort jobs").accessibilityValue(sortOrder.rawValue)
                     Button { newJob = true } label: { Label("New Job", systemImage: "plus").font(.subheadline.bold()) }.buttonStyle(.borderedProminent)
                 }
                 HStack(spacing: 10) {
@@ -138,11 +149,15 @@ struct HomeView: View {
                     if jobs.isEmpty { Button("Add Example Job") { context.insert(SampleJob.make()); filter = .completed }.buttonStyle(.bordered) }
                 } else {
                     LazyVStack(spacing: 8) { ForEach(visibleJobs) { job in
-                        Button { selectedJob = job } label: { JobRow(job: job) }.buttonStyle(.plain)
-                            .contextMenu {
-                                Button { duplicate(job) } label: { Label("Duplicate Job", systemImage: "plus.square.on.square") }
-                                Button("Delete job", role: .destructive) { jobToDelete = job }
-                            }
+                        HStack(spacing: 0) {
+                            Button { selectedJob = job } label: { JobRow(job: job) }.buttonStyle(.plain)
+                            Menu { jobActions(job) } label: {
+                                Image(systemName: "ellipsis").font(.body.weight(.semibold))
+                                    .frame(width: 44, height: 44).contentShape(Rectangle())
+                            }.padding(.trailing, 6).accessibilityLabel("Actions for \(job.title)")
+                        }
+                        .background(.white, in: RoundedRectangle(cornerRadius: 13))
+                        .contextMenu { jobActions(job) }
                     } }
                 }
             }.padding(18)
@@ -155,6 +170,20 @@ struct HomeView: View {
                 Button("OK") { duplicateError = nil }
             } message: { Text(duplicateError ?? "") }
     }
+    @ViewBuilder private func jobActions(_ job: Job) -> some View {
+        Button { job.isPinned.toggle() } label: {
+            Label(job.isPinned ? "Unpin" : "Pin", systemImage: job.isPinned ? "pin.slash" : "pin")
+        }
+        Button { duplicate(job) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+        Button(role: .destructive) { jobToDelete = job } label: {
+            Label {
+                Text("Delete")
+            } icon: {
+                Image(uiImage: UIImage(systemName: "trash")?.withTintColor(.systemRed, renderingMode: .alwaysOriginal) ?? UIImage())
+            }
+        }
+    }
+
     private func duplicate(_ job: Job) {
         let prefix = JobReference.prefix(job.duplicateNumberPrefix)
         let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4))"
@@ -194,10 +223,16 @@ struct JobRow: View {
             if let filename = job.photos.first?.filename, let image = PhotoStore.image(filename) {
                 Image(uiImage: image).resizable().scaledToFill().frame(width: 62, height: 62).clipped().clipShape(RoundedRectangle(cornerRadius: 9))
             } else { Image(systemName: "hammer.fill").frame(width: 62, height: 62).background(Brand.pale, in: RoundedRectangle(cornerRadius: 9)) }
-            VStack(alignment: .leading, spacing: 4) { Text(job.title).font(.subheadline.bold()).lineLimit(1); Text(job.clientName.isEmpty ? job.siteAddress : job.clientName).font(.caption).foregroundStyle(.secondary).lineLimit(1); Text(job.createdAt, style: .date).font(.caption2).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(job.title).font(.subheadline.bold()).lineLimit(1)
+                Text(job.clientName.isEmpty ? job.siteAddress : job.clientName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(job.createdAt, style: .date).font(.caption2).foregroundStyle(.secondary)
+            }
             Spacer(minLength: 4)
-            Text(job.status.rawValue).font(.caption2.bold()).foregroundStyle(job.status == .completed ? Brand.teal : Brand.blue).padding(6).background(job.status == .completed ? Color.green.opacity(0.12) : Brand.pale, in: Capsule())
-        }.foregroundStyle(Brand.navy).padding(10).background(.white, in: RoundedRectangle(cornerRadius: 13))
+            if job.isPinned {
+                Image(systemName: "pin.fill").font(.caption2).foregroundStyle(Brand.blue).accessibilityLabel("Pinned")
+            }
+        }.foregroundStyle(Brand.navy).padding(10).contentShape(Rectangle())
     }
 }
 
@@ -224,7 +259,7 @@ struct CreateJobView: View {
     @State private var saveError = ""
     @State private var didPrefill = false
     @FocusState private var technicianFocused: Bool
-    private var startingCurrencyCode: String { defaultCurrencyCode.isEmpty ? (profile?.currencyCode ?? "USD") : defaultCurrencyCode }
+    private var startingCurrencyCode: String { defaultCurrencyCode.isEmpty ? "USD" : defaultCurrencyCode }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -254,6 +289,8 @@ struct CreateJobView: View {
                                 Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        Text("A preset fills in your saved business details and document settings.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 JobFormHeading("Job")
@@ -332,7 +369,6 @@ struct CreateJobView: View {
         var documentPreset = chosenPreset ?? SavedPreset.custom(profile: profile)
         if documentPreset.business.currencyCode != currencyCode {
             documentPreset.id = UUID()
-            documentPreset.name = "Custom"
             documentPreset.business.currencyCode = currencyCode
         }
         job.applyPreset(documentPreset, includeJobDefaults: false)
@@ -519,6 +555,6 @@ struct BusinessProfileView: View {
         }.navigationTitle("Business Details")
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
             .task { await entitlements.refresh() }
-            .onChange(of: selectedLogo) { _, item in Task { if entitlements.isPro, let data = try? await item?.loadTransferable(type: Data.self), let image = UIImage(data: data), let name = try? PhotoStore.save(image) { profile.logoFilename = name } } }
+            .onChange(of: selectedLogo) { _, item in Task { if entitlements.isPro, let data = try? await item?.loadTransferable(type: Data.self), let image = UIImage(data: data), let name = try? PhotoStore.save(image, preserveTransparency: true) { profile.logoFilename = name } } }
     }
 }

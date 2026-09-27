@@ -160,7 +160,10 @@ struct JobPhoto: Codable, Identifiable, Hashable {
 }
 
 struct PriceItem: Codable, Identifiable, Hashable {
-    enum Kind: String, Codable { case material, labour, charge }
+    enum Kind: String, Codable {
+        case material, labour, charge
+        var displayName: String { self == .labour ? "Labor" : rawValue.capitalized }
+    }
     var id = UUID()
     var kind: Kind
     var name: String
@@ -178,6 +181,100 @@ struct ReceiptRecord: Codable, Identifiable {
     var filename: String
     var items: [PriceItem]
     var confirmed: Bool
+}
+
+enum JobSortOrder: String, CaseIterable {
+    case recentlyUpdated = "Recently updated"
+    case nameAscending = "Name A–Z"
+    case nameDescending = "Name Z–A"
+    case newestCreated = "Newest created"
+    case oldestCreated = "Oldest created"
+
+    func sorted(_ jobs: [Job]) -> [Job] {
+        jobs.sorted { lhs, rhs in
+            if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+            switch self {
+            case .recentlyUpdated:
+                let left = lhs.updatedAt ?? lhs.createdAt, right = rhs.updatedAt ?? rhs.createdAt
+                if left != right { return left > right }
+            case .nameAscending, .nameDescending:
+                let order = lhs.title.localizedStandardCompare(rhs.title)
+                if order != .orderedSame { return self == .nameAscending ? order == .orderedAscending : order == .orderedDescending }
+            case .newestCreated, .oldestCreated:
+                if lhs.createdAt != rhs.createdAt { return self == .newestCreated ? lhs.createdAt > rhs.createdAt : lhs.createdAt < rhs.createdAt }
+            }
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+}
+
+struct JobEditSnapshot: Equatable {
+    static func recordChanges(from previous: [JobEditSnapshot], in jobs: [Job]) {
+        let old = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+        for job in jobs {
+            if let snapshot = old[job.id], snapshot != JobEditSnapshot(job) {
+                job.updatedAt = Date()
+            }
+        }
+    }
+
+    var id: UUID
+    var number: String
+    var title: String
+    var clientName: String
+    var clientEmail: String
+    var clientPhone: String
+    var siteAddress: String
+    var category: String
+    var issue: String
+    var technician: String
+    var businessName: String
+    var createdAt: Date
+    var completedAt: Date?
+    var statusRaw: String
+    var roughNote: String
+    var professionalNote: String
+    var invoiceNotes: String
+    var currencyCode: String
+    var taxRate: String
+    var discount: String
+    var dueDate: Date
+    var paid: Bool
+    var technicianConfirmed: Bool
+    var photosData: Data
+    var itemsData: Data
+    var receiptsData: Data
+    var documentPresetData: Data?
+    init(_ job: Job) {
+        id = job.id
+        number = job.number
+        title = job.title
+        clientName = job.clientName
+        clientEmail = job.clientEmail
+        clientPhone = job.clientPhone
+        siteAddress = job.siteAddress
+        category = job.category
+        issue = job.issue
+        technician = job.technician
+        businessName = job.businessName
+        createdAt = job.createdAt
+        completedAt = job.completedAt
+        statusRaw = job.statusRaw
+        roughNote = job.roughNote
+        professionalNote = job.professionalNote
+        invoiceNotes = job.invoiceNotes
+        currencyCode = job.currencyCode
+        taxRate = job.taxRate
+        discount = job.discount
+        dueDate = job.dueDate
+        paid = job.paid
+        technicianConfirmed = job.technicianConfirmed
+        photosData = job.photosData
+        itemsData = job.itemsData
+        receiptsData = job.receiptsData
+        documentPresetData = job.documentPresetData
+    }
 }
 
 @Model final class Job {
@@ -209,6 +306,9 @@ struct ReceiptRecord: Codable, Identifiable {
     var receiptsData: Data
     var documentPresetData: Data?
     var isSample: Bool
+
+    var updatedAt: Date?
+    var isPinned: Bool = false
 
     init(number: String, title: String, clientName: String, siteAddress: String, category: String, issue: String, technician: String, businessName: String, currencyCode: String, taxRate: String, isSample: Bool = false) {
         id = UUID(); self.number = number; self.title = title; self.clientName = clientName
@@ -251,7 +351,6 @@ struct ReceiptRecord: Codable, Identifiable {
         draft.business.taxRate = taxRate
         draft.business.currencyCode = currencyCode
         draft.id = UUID()
-        draft.name = "Custom"
         draft.technician = ""
         draft.category = ""
         return draft
@@ -262,7 +361,6 @@ struct ReceiptRecord: Codable, Identifiable {
         currencyCode = code
         if var preset = documentPreset {
             preset.id = UUID()
-            preset.name = "Custom"
             preset.business.currencyCode = code
             documentPreset = preset
         }
@@ -361,16 +459,16 @@ enum PhotoStore {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
-    static func save(_ image: UIImage) throws -> String {
-        let filename = UUID().uuidString + ".jpg"
+    static func save(_ image: UIImage, preserveTransparency: Bool = false) throws -> String {
+        let filename = UUID().uuidString + (preserveTransparency ? ".png" : ".jpg")
         guard image.size.width > 0, image.size.height > 0 else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
         let pixelWidth = CGFloat(image.cgImage?.width ?? Int(image.size.width * image.scale))
         let pixelHeight = CGFloat(image.cgImage?.height ?? Int(image.size.height * image.scale))
         let scale = min(1, 2400 / max(pixelWidth, pixelHeight))
         let target = CGSize(width: pixelWidth * scale, height: pixelHeight * scale)
-        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
         let prepared = scale < 1 ? UIGraphicsImageRenderer(size: target, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: target)) } : image
-        guard let data = prepared.jpegData(compressionQuality: 0.86) else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
+        guard let data = preserveTransparency ? prepared.pngData() : prepared.jpegData(compressionQuality: 0.86) else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
         try data.write(to: directory.appendingPathComponent(filename), options: .atomic)
         return filename
     }
@@ -398,7 +496,7 @@ enum SampleJob {
         job.technicianConfirmed = true
         let before = JobPhoto(kind: .before, filename: "sample-before-repair-v2")
         job.photos = [before, JobPhoto(kind: .after, filename: "sample-after-repair-v2", pairedBeforeID: before.id)]
-        job.items = [PriceItem(kind: .material, name: "40mm compression connector", quantity: "1", unitPrice: "4.50"), PriceItem(kind: .material, name: "Rubber washer", quantity: "1", unitPrice: "1.20"), PriceItem(kind: .material, name: "Plumber's tape", quantity: "1", unitPrice: "2.00"), PriceItem(kind: .labour, name: "Plumbing labour", quantity: "1.5", unitPrice: "45.00"), PriceItem(kind: .charge, name: "Call-out fee", quantity: "1", unitPrice: "25.00")]
+        job.items = [PriceItem(kind: .material, name: "40mm compression connector", quantity: "1", unitPrice: "4.50"), PriceItem(kind: .material, name: "Rubber washer", quantity: "1", unitPrice: "1.20"), PriceItem(kind: .material, name: "Plumber's tape", quantity: "1", unitPrice: "2.00"), PriceItem(kind: .labour, name: "Plumbing labor", quantity: "1.5", unitPrice: "45.00"), PriceItem(kind: .charge, name: "Call-out fee", quantity: "1", unitPrice: "25.00")]
         job.invoiceNotes = "Payment due within 14 days. Please quote the invoice number when paying."
         return job
     }

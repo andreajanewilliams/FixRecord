@@ -44,8 +44,8 @@ struct ExportView: View {
     private var hasBusinessName: Bool { renderProfile?.businessName.isEmpty == false || !job.businessName.isEmpty }
     private var clientPackLocked: Bool { kind == .pack && !entitlements.isPro }
     private var documentDetailsSubtitle: String {
-        guard hasBusinessName else { return "Name and contact details · Free" }
         if let name = job.documentPreset?.name { return name }
+        guard hasBusinessName else { return "Name and contact details · Free" }
         let businessName = renderProfile?.businessName ?? ""
         return businessName.isEmpty ? job.businessName : businessName
     }
@@ -166,7 +166,7 @@ struct ExportView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(hasBusinessName ? "Document details" : "Add your business name").font(.subheadline.bold()).foregroundStyle(Brand.navy)
                         Text(documentDetailsSubtitle)
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     }
                     Spacer(minLength: 8)
                     Text(hasBusinessName ? "Edit" : "Set up").font(.subheadline.weight(.semibold)).foregroundStyle(Brand.blue)
@@ -250,11 +250,6 @@ struct ShareOptionsView: View {
 enum PDFMaker {
     static let page = CGRect(x: 0, y: 0, width: 595, height: 842)
     private static let navy = UIColor(red: 0.07, green: 0.14, blue: 0.25, alpha: 1)
-    private static let blue = UIColor(red: 0.04, green: 0.37, blue: 0.89, alpha: 1)
-    private static let pale = UIColor(red: 0.93, green: 0.96, blue: 0.99, alpha: 1)
-    private static let green = UIColor(red: 0.07, green: 0.56, blue: 0.40, alpha: 1)
-    private static let margin: CGFloat = 44
-    private static let contentWidth: CGFloat = 507
 
     static func exportDocuments(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions,
                                 isPro: Bool, includePhotos: Bool = true) throws -> (document: Data, clientPack: Data?) {
@@ -265,11 +260,12 @@ enum PDFMaker {
         return (document, pack)
     }
 
-    static func make(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions = DocumentOptions(), isPro: Bool = false, includePhotos: Bool = true) throws -> Data {
+    static func make(kind: ExportKind, job: Job, profile: BusinessProfile?, options: DocumentOptions = DocumentOptions(), isPro: Bool = false, includePhotos: Bool = true, previewLayout: DocumentTemplate? = nil) throws -> Data {
         guard kind != .pack || isPro else {
             throw NSError(domain: "FixRecord", code: 3, userInfo: [NSLocalizedDescriptionKey: "Client Pack requires Pro."])
         }
-        let effective = options.effective(isPro: isPro)
+        var effective = options.effective(isPro: isPro)
+        if let previewLayout { effective.template = previewLayout }
         let pricedItems = kind == .report ? job.items.filter { $0.kind == .material && effective.showPricesInReport } : job.items
         guard (kind == .report || (Money.isValid(job.discount) && Money.isValid(job.taxRate))) && pricedItems.allSatisfy({ Money.isValid($0.quantity) && Money.isValid($0.unitPrice) }) else {
             throw NSError(domain: "FixRecord", code: 1, userInfo: [NSLocalizedDescriptionKey: "Review quantity, price, discount and Tax / VAT before exporting."])
@@ -279,10 +275,11 @@ enum PDFMaker {
         }
         return UIGraphicsPDFRenderer(bounds: page).pdfData { context in
             if kind == .report || kind == .pack {
-                if includePhotos && job.photos.contains(where: { $0.includeInReport }) { drawReport(context, job: job, profile: profile, options: effective) }
-                else { drawTextReport(context, job: job, profile: profile, options: effective) }
+                DocumentRenderer(context, job: job, profile: profile, options: effective).report(includePhotos: includePhotos)
             }
-            if kind == .invoice || kind == .pack { drawInvoice(context, job: job, profile: profile, options: effective) }
+            if kind == .invoice || kind == .pack {
+                DocumentRenderer(context, job: job, profile: profile, options: effective).invoice()
+            }
         }
     }
 
@@ -295,523 +292,494 @@ enum PDFMaker {
         } + includedAfter.filter { item in !includedBefore.contains(where: { $0.id == item.pairedBeforeID }) }.map { (nil, $0) }
     }
 
-    private static func drawReport(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
-        context.beginPage()
-        var y = header("WORK REPORT", job: job, profile: profile, options: options)
-        text(job.title, x: margin, y: y, width: contentWidth, size: 22, bold: true, colour: navy); y += 32
-        text("Job #\(job.number)  |  \((job.completedAt ?? job.createdAt).formatted(date: .abbreviated, time: .omitted))", x: margin, y: y, width: contentWidth, size: 10, colour: .darkGray); y += 26
-        let cellWidth = (contentWidth - 16) / 3
-        for (index, pair) in [("CLIENT", job.clientName), ("PROPERTY / SITE", job.siteAddress), ("TECHNICIAN", job.technician)].enumerated() {
-            let x = margin + CGFloat(index) * (cellWidth + 8)
-            panel(CGRect(x: x, y: y, width: cellWidth, height: 63), template: options.template)
-            text(pair.0, x: x + 9, y: y + 10, width: cellWidth - 18, size: 8, bold: true, colour: navy)
-            text(pair.1, x: x + 9, y: y + 28, width: cellWidth - 18, height: 30, size: 10, colour: navy, wrap: true)
+    /// One renderer owns its palette and page geometry, so previews and exports stay identical.
+    private final class DocumentRenderer {
+        let context: UIGraphicsPDFRendererContext
+        let job: Job
+        let profile: BusinessProfile?
+        let options: DocumentOptions
+        let layout: DocumentTemplate
+        let accent: UIColor
+        let ink: UIColor
+        let tint: UIColor
+        let onAccent: UIColor
+        var y: CGFloat = 0
+        var pageNumber = 0
+        var x: CGFloat { layout == .executive ? 216 : layout == .copper ? 174 : 44 }
+        var width: CGFloat { 551 - x }
+        var serif: Bool { [.classic, .editorial, .copper].contains(layout) }
+        var businessName: String {
+            let name = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
+            return name.isEmpty ? "Your Business" : name
         }
-        y += 77
-        if options.showReportedIssue && !job.issue.isEmpty {
-            section("REPORTED ISSUE", y: &y)
-            paragraph(job.issue, y: &y, context: context, options: options)
+
+        init(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
+            self.context = context; self.job = job; self.profile = profile; self.options = options
+            layout = options.template
+            accent = DocumentColour.colour(options.colour(for: options.template))
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            accent.getRed(&r, green: &g, blue: &b, alpha: &a)
+            func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGFloat {
+                func linear(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+                return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+            }
+            onAccent = luminance(r, g, b) < 0.18 ? .white : .black
+            tint = UIColor(red: 0.94 + r * 0.06, green: 0.94 + g * 0.06, blue: 0.94 + b * 0.06, alpha: 1)
+            while luminance(r, g, b) > 0.14 { r *= 0.92; g *= 0.92; b *= 0.92 }
+            ink = UIColor(red: r, green: g, blue: b, alpha: 1)
         }
-        let before = job.photos.filter { $0.kind == .before }
-        let after = job.photos.filter { $0.kind == .after }
-        for pair in photoPairs(before: before, after: after) {
-            ensure(205, y: &y, context: context, options: options)
-            if pair.0 != nil && pair.1 != nil {
-                photo(pair.0, title: "BEFORE", x: margin, y: y, showLabel: options.showPhotoLabels)
-                photo(pair.1, title: "AFTER", x: margin + 258, y: y, showLabel: options.showPhotoLabels)
+
+        func font(_ size: CGFloat, bold: Bool = false, display: Bool = false) -> UIFont {
+            let base = UIFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular)
+            let design: UIFontDescriptor.SystemDesign = display && serif ? .serif : display && layout == .blueprint ? .monospaced : .default
+            return UIFont(descriptor: base.fontDescriptor.withDesign(design) ?? base.fontDescriptor, size: size)
+        }
+        func text(_ value: String, _ rect: CGRect, size: CGFloat = 10, bold: Bool = false, colour: UIColor? = nil,
+                  alignment: NSTextAlignment = .left, display: Bool = false) {
+            let style = NSMutableParagraphStyle(); style.alignment = alignment; style.lineBreakMode = .byWordWrapping
+            NSString(string: value).draw(in: rect, withAttributes: [.font: font(size, bold: bold, display: display),
+                .foregroundColor: colour ?? navy, .paragraphStyle: style])
+        }
+        func height(_ value: String, width: CGFloat, size: CGFloat = 10, bold: Bool = false, display: Bool = false) -> CGFloat {
+            ceil(NSString(string: value).boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font(size, bold: bold, display: display)], context: nil).height)
+        }
+        func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ colour: UIColor, radius: CGFloat = 0) {
+            colour.setFill(); UIBezierPath(roundedRect: CGRect(x: x, y: y, width: w, height: h), cornerRadius: radius).fill()
+        }
+        func rule(_ y: CGFloat, x: CGFloat? = nil, width: CGFloat? = nil, colour: UIColor? = nil, weight: CGFloat = 0.5) {
+            rect(x ?? self.x, y, width ?? self.width, weight, colour ?? UIColor(white: 0.82, alpha: 1))
+        }
+        func border(_ rect: CGRect, colour: UIColor? = nil) {
+            let path = UIBezierPath(rect: rect.insetBy(dx: 0.25, dy: 0.25)); path.lineWidth = 0.5
+            (colour ?? ink.withAlphaComponent(0.3)).setStroke(); path.stroke()
+        }
+        func newPage() {
+            context.beginPage(); pageNumber += 1; y = 44
+            if layout == .copper { rect(26, 30, 3, 745, accent) }
+        }
+        func ensure(_ space: CGFloat) {
+            if y + space > 768 { footer(); newPage() }
+        }
+        func footer() {
+            rule(795, x: 44, width: 507)
+            if options.showFixRecordBranding { text("Created with FixRecord", CGRect(x: 44, y: 806, width: 230, height: 14), size: 8, colour: .darkGray) }
+            text("\(job.number)  ·  \(pageNumber)", CGRect(x: 315, y: 806, width: 236, height: 14), size: 8, colour: .darkGray, alignment: .right)
+        }
+        func lines(_ value: String, width: CGFloat, size: CGFloat = 10) -> [String] {
+            let storage = NSTextStorage(string: value, attributes: [.font: font(size)])
+            let manager = NSLayoutManager(); let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0; storage.addLayoutManager(manager); manager.addTextContainer(container)
+            manager.ensureLayout(for: container)
+            var result: [String] = []
+            manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) { _, _, _, range, _ in
+                let characters = manager.characterRange(forGlyphRange: range, actualGlyphRange: nil)
+                result.append((value as NSString).substring(with: characters).trimmingCharacters(in: .newlines))
+            }
+            return result
+        }
+        func write(_ value: String, x: CGFloat? = nil, width: CGFloat? = nil, size: CGFloat = 10) {
+            let lineHeight = ceil(font(size).lineHeight) + 3
+            for line in lines(value, width: width ?? self.width, size: size) {
+                ensure(lineHeight)
+                text(line, CGRect(x: x ?? self.x, y: y, width: width ?? self.width, height: lineHeight), size: size)
+                y += lineHeight
+            }
+        }
+
+        func letterhead(invoice: Bool) {
+            let contact = options.showBusinessDetails ? [profile?.phone, profile?.email, profile?.address,
+                invoice && profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  ·  ") : ""
+            let logo = options.showLogo ? profile.flatMap { PhotoStore.image($0.logoFilename) } : nil
+            var nameX: CGFloat = 44
+            var logoBox: CGRect?
+            let nameSize: CGFloat = layout == .editorial ? 27 : 20
+            let centred = layout == .classic || layout == .minimal
+            if layout == .horizon { rect(0, 0, 595, 8, accent) }
+            if layout == .executive { rect(44, 30, 507, 69, accent) }
+            if layout == .studio { rect(44, 28, 32, 4, accent) }
+            if logo != nil {
+                let logoSize = CGFloat(40 * options.logoSize / 100)
+                let logoX: CGFloat = centred ? (595 - logoSize) / 2 : layout == .executive ? 56 : 44
+                logoBox = CGRect(x: logoX, y: 38, width: logoSize, height: logoSize)
+                if !centred { nameX = logoX + logoSize + 14 }
+            } else if layout == .executive { nameX += 14 }
+            let nameY: CGFloat = centred ? (logoBox.map { $0.maxY + 9 } ?? 40) : 40
+            let nameWidth: CGFloat = 551 - nameX - (layout == .executive ? 14 : 0)
+            let nameHeight = height(businessName, width: nameWidth, size: nameSize, bold: !serif, display: true)
+            // Long business names grow the header instead of colliding with contact details.
+            let headerBottom = max(nameY + nameHeight, logoBox?.maxY ?? 0)
+            if layout == .executive { rect(44, 30, 507, max(69, headerBottom - 30 + 15), accent) }
+            if let logo, let logoBox { drawLogo(logo, in: logoBox) }
+            text(businessName, CGRect(x: nameX, y: nameY, width: nameWidth, height: nameHeight), size: nameSize, bold: !serif,
+                 colour: layout == .executive ? onAccent : ink, alignment: centred ? .center : layout == .copper ? .right : .left, display: true)
+            var contactY = headerBottom + 9
+            if layout == .executive { contactY = max(111, contactY + 20) }
+            let contactHeight = contact.isEmpty ? 0 : height(contact, width: 507, size: 8)
+            text(contact, CGRect(x: 44, y: contactY, width: 507, height: contactHeight), size: 8, colour: .darkGray,
+                 alignment: centred ? .center : layout == .copper ? .right : .left)
+            y = max(contactY + contactHeight + 22, 111)
+            if [.classic, .editorial].contains(layout) {
+                rule(y - 9, x: 44, width: 507, colour: ink, weight: 1)
+                if layout == .classic { rule(y - 5, x: 44, width: 507, colour: ink) }
+            } else if ![.studio, .executive, .horizon, .copper].contains(layout) { rule(y - 9, x: 44, width: 507) }
+        }
+        func drawLogo(_ image: UIImage, in box: CGRect) {
+            guard image.size.width > 0, image.size.height > 0 else { return }
+            let scale = min(box.width / image.size.width, box.height / image.size.height)
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            image.draw(in: CGRect(x: box.midX - size.width / 2, y: box.midY - size.height / 2, width: size.width, height: size.height))
+        }
+        func title(_ value: String, size: CGFloat = 25, centred: Bool = false) {
+            let h = height(value, width: width, size: size, bold: !serif, display: true)
+            ensure(h + 20)
+            text(value, CGRect(x: x, y: y, width: width, height: h), size: size, bold: !serif, colour: ink, alignment: centred ? .center : .left, display: true)
+            y += h + 12
+        }
+        func fields(_ entries: [(String, String)], columns: Int, boxed: Bool = false) {
+            let gap: CGFloat = boxed ? 0 : 15
+            let cell = (width - CGFloat(columns - 1) * gap) / CGFloat(columns)
+            for start in stride(from: 0, to: entries.count, by: columns) {
+                let row = Array(entries[start..<min(start + columns, entries.count)])
+                let h = max(50, (row.map { height($0.1, width: cell - 20, size: 9) }.max() ?? 0) + 34)
+                if h > 620 {
+                    for entry in row { section(entry.0, value: entry.1) }
+                    continue
+                }
+                ensure(h + 10)
+                for (index, entry) in row.enumerated() {
+                    let left = x + CGFloat(index) * (cell + gap)
+                    if boxed { border(CGRect(x: left, y: y, width: cell, height: h)) }
+                    else if layout == .modern || layout == .horizon { rect(left, y, cell, h, tint, radius: 5) }
+                    text(entry.0, CGRect(x: left + 10, y: y + 8, width: cell - 20, height: 12), size: 7, bold: true, colour: ink)
+                    text(entry.1, CGRect(x: left + 10, y: y + 24, width: cell - 20, height: h - 28), size: 9)
+                }
+                y += h + 12
+            }
+        }
+        func sidebar(_ entries: [(String, String)]) {
+            var sideY = y
+            let sideWidth: CGFloat = layout == .executive ? 140 : 106
+            if layout == .executive { rect(44, y, sideWidth, min(600, 768 - y), tint, radius: 4) }
+            for entry in entries where !entry.1.isEmpty {
+                let left: CGFloat = layout == .executive ? 56 : 44
+                let available = sideWidth - (layout == .executive ? 24 : 12)
+                let h = height(entry.1, width: available, size: 9)
+                // Oversized identity content is handled in the main flow without loss.
+                if sideY + h + 32 > 756 { section(entry.0, value: entry.1); continue }
+                text(entry.0, CGRect(x: left, y: sideY + 9, width: available, height: 12), size: 7, bold: true, colour: ink)
+                text(entry.1, CGRect(x: left, y: sideY + 26, width: available, height: h), size: 9)
+                sideY += h + 45
+            }
+        }
+        func section(_ label: String, value: String) {
+            guard !value.isEmpty else { return }
+            ensure(44)
+            if layout == .minimal {
+                let labelWidth: CGFloat = 97
+                text(label, CGRect(x: x, y: y + 2, width: labelWidth - 12, height: 36), size: 8, bold: true, colour: ink)
+                let top = y
+                write(value, x: x + labelWidth, width: width - labelWidth)
+                if y >= top { y = max(y, top + 30) }
+                rule(y + 4); y += 19
             } else {
-                photo(pair.0 ?? pair.1, title: pair.0 == nil ? "AFTER" : "BEFORE", x: margin, y: y, width: contentWidth, showLabel: options.showPhotoLabels)
+                if layout == .blueprint {
+                    rect(x, y, width, 21, tint)
+                    text(label, CGRect(x: x + 8, y: y + 5, width: width - 16, height: 14), size: 8, bold: true, colour: ink)
+                    y += 29
+                } else {
+                    if layout == .studio || layout == .horizon || layout == .precision { rect(x, y + 2, 3, 12, accent) }
+                    let inset: CGFloat = layout == .studio || layout == .horizon || layout == .precision ? 12 : 0
+                    text(label, CGRect(x: x + inset, y: y, width: width - inset, height: 16), size: 9, bold: true, colour: ink)
+                    y += 21
+                }
+                write(value, size: layout == .editorial ? 11 : 10)
+                y += layout == .editorial ? 20 : 12
             }
-            y += 201
         }
-        if !job.summary.isEmpty {
-            section("WORK COMPLETED", y: &y)
-            paragraph(job.summary, y: &y, context: context, options: options)
-        }
-        let materials = job.items.filter { $0.kind == .material && !$0.name.isEmpty }
-        if options.showMaterials && !materials.isEmpty {
-            section("MATERIALS USED", y: &y)
-            for item in materials {
-                ensure(20, y: &y, context: context, options: options)
-                let price = options.showPricesInReport ? "   ·   \(Money.format(item.total, currency: job.currencyCode))" : ""
-                text("•  \(item.name) (×\(item.quantity))\(price)", x: margin + 4, y: y, width: contentWidth - 8, size: 10)
-                y += 19
+        func report(includePhotos: Bool) {
+            newPage(); letterhead(invoice: false)
+            let photos = includePhotos ? job.photos.filter { $0.includeInReport } : []
+            let date = (job.completedAt ?? job.createdAt).formatted(date: .abbreviated, time: .omitted)
+            let client = [job.clientName, job.clientEmail].filter { !$0.isEmpty }.joined(separator: "\n")
+            let identity = [("CLIENT", client), ("PROPERTY / SITE", job.siteAddress), ("TECHNICIAN", job.technician)]
+            if layout == .executive || layout == .copper {
+                sidebar([("REFERENCE", job.number), ("DATE", date), ("STATUS", job.status.rawValue)] + identity)
             }
-            y += 5
-        }
-        if options.showTechnicianConfirmation && job.status == .completed && job.technicianConfirmed && !job.technician.isEmpty {
-            section("COMPLETED BY", y: &y)
-            let detail = [job.technician, profile?.businessName ?? job.businessName, job.completedAt?.formatted(date: .abbreviated, time: .shortened) ?? ""].filter { !$0.isEmpty }.joined(separator: "  ·  ")
-            paragraph(detail, y: &y, context: context, options: options)
-        }
-        if options.showClientAcknowledgement {
-            ensure(64, y: &y, context: context, options: options)
-            section("CLIENT ACKNOWLEDGEMENT (OPTIONAL)", y: &y)
-            text("Name: ____________________    Signature: ____________________    Date: __________", x: margin, y: y, width: contentWidth, size: 9); y += 25
-        }
-        if options.showAdditionalNotes && !job.invoiceNotes.isEmpty { section("ADDITIONAL NOTES", y: &y); paragraph(job.invoiceNotes, y: &y, context: context, options: options) }
-        footer(job: job, options: options)
-    }
-
-    private static func drawTextReport(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
-        context.beginPage()
-        let business = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
-        if options.template == .modern {
-        var nameX = margin
-        if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
-            aspectFill(logo, in: CGRect(x: margin, y: 34, width: 48, height: 48)); nameX += 60
-        }
-        text(business.isEmpty ? "Your Business" : business, x: nameX, y: 38, width: 280, size: 20, bold: true, colour: navy)
-        text("Professional work documentation", x: nameX, y: 66, width: 270, size: 9, colour: .darkGray)
-        if options.showBusinessDetails {
-            let contact = [profile?.phone, profile?.email, profile?.address].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-            text(contact, x: 377, y: 38, width: 174, height: 56, size: 8, colour: navy, alignment: .right, wrap: true)
-        }
-        line(106)
-
-        } else { _ = header("WORK REPORT", job: job, profile: profile, options: options) }
-
-        text("Work Report", x: margin, y: 122, width: 360, size: 28, bold: true, colour: navy)
-        let completed = job.status == .completed
-        fill(CGRect(x: 456, y: 128, width: 95, height: 25), colour: completed ? UIColor(red: 0.87, green: 0.98, blue: 0.91, alpha: 1) : pale)
-        text(job.status.rawValue, x: 461, y: 134, width: 85, size: 10, bold: true, colour: completed ? green : navy, alignment: .center)
-        text(job.title, x: margin, y: 162, width: contentWidth, size: 13, bold: true, colour: navy)
-        let dateLabel = completed ? "Completed" : "Created"
-        text("Job #\(job.number)    |    \(dateLabel): \((job.completedAt ?? job.createdAt).formatted(date: .abbreviated, time: .omitted))", x: margin, y: 184, width: contentWidth, size: 10, colour: .darkGray)
-
-        var y: CGFloat = 216
-        panel(CGRect(x: margin, y: y, width: contentWidth, height: 87), template: options.template)
-        let identityWidth = (contentWidth - 20) / 3
-        let identity: [(String, String)] = [
-            ("CLIENT", [job.clientName, job.clientEmail].filter { !$0.isEmpty }.joined(separator: "\n")),
-            ("PROPERTY / SITE", job.siteAddress),
-            ("TECHNICIAN", [job.technician, business].filter { !$0.isEmpty }.joined(separator: "\n"))
-        ]
-        for (index, entry) in identity.enumerated() {
-            let x = margin + CGFloat(index) * (identityWidth + 10)
-            text(entry.0, x: x + 10, y: y + 12, width: identityWidth - 20, size: 9, bold: true, colour: navy)
-            text(entry.1, x: x + 10, y: y + 31, width: identityWidth - 20, height: 50, size: 10, colour: navy, wrap: true)
-        }
-        y += 106
-
-        if options.showReportedIssue && !job.issue.isEmpty {
-            textReportSection("Reported Issue", symbol: "doc.text.fill", value: job.issue, y: &y, context: context, options: options)
-        }
-        if !job.summary.isEmpty {
-            textReportSection("Work Completed", symbol: "wrench.adjustable.fill", value: job.summary, y: &y, context: context, options: options)
-        }
-        let materials = job.items.filter { $0.kind == .material && !$0.name.isEmpty }
-        if options.showMaterials && !materials.isEmpty {
-            ensure(56, y: &y, context: context, options: options)
-            reportIcon("shippingbox.fill", x: margin, y: y, size: 16)
-            text("Materials Used", x: margin + 28, y: y, width: 300, size: 12, bold: true, colour: navy)
-            y += 29
-            fill(CGRect(x: margin, y: y, width: contentWidth, height: 24), colour: pale)
-            text("ITEM", x: margin + 10, y: y + 6, width: 235, size: 9, bold: true, colour: navy)
-            text("QTY", x: 331, y: y + 6, width: 40, size: 9, bold: true, colour: navy)
-            if options.showPricesInReport {
-                text("UNIT PRICE", x: 389, y: y + 6, width: 75, size: 9, bold: true, colour: navy)
-                text("TOTAL", x: 475, y: y + 6, width: 65, size: 9, bold: true, colour: navy, alignment: .right)
+            if layout == .horizon { fields([("REFERENCE", job.number), ("DATE", date), ("STATUS", job.status.rawValue)], columns: 3) }
+            title(photos.isEmpty ? "Work Report" : job.title, size: layout == .editorial || layout == .studio ? 31 : 24, centred: layout == .classic)
+            if photos.isEmpty { write(job.title, size: 12); y += 10 }
+            if ![.executive, .copper, .horizon].contains(layout) {
+                let reference = [job.number, date] + (layout == .classic ? [] : [job.status.rawValue])
+                text(reference.joined(separator: "  /  "), CGRect(x: x, y: y, width: width, height: 15), size: 9, colour: .darkGray, alignment: layout == .classic ? .center : .left); y += 25
             }
-            y += 24
-            for item in materials {
-                ensure(25, y: &y, context: context, options: options)
-                text(item.name, x: margin + 10, y: y + 6, width: 265, size: 10, colour: navy)
-                text(item.quantity, x: 331, y: y + 6, width: 40, size: 10, colour: navy)
+            switch layout {
+            case .executive, .copper: break
+            case .precision:
+                for field in identity {
+                    let h = max(30, height(field.1, width: width - 140, size: 10) + 14)
+                    if h > 620 { section(field.0, value: field.1); continue }
+                    ensure(h)
+                    rule(y + h, colour: ink.withAlphaComponent(0.16))
+                    text(field.0, CGRect(x: x + 8, y: y + 8, width: 103, height: 14), size: 8, bold: true, colour: ink)
+                    text(field.1, CGRect(x: x + 128, y: y + 7, width: width - 140, height: h - 10), size: 10)
+                    y += h
+                }; y += 18
+            case .classic: fields(identity + [("STATUS", job.status.rawValue)], columns: 2, boxed: true)
+            case .studio:
+                fields(identity, columns: 3)
+            default: fields(identity, columns: 3, boxed: layout == .blueprint)
+            }
+            let narrativeWidth = (width - 24) / 2 - 20
+            let pairedNarrative = [.editorial, .blueprint].contains(layout) && options.showReportedIssue && !job.issue.isEmpty && !job.summary.isEmpty
+                && max(height(job.issue, width: narrativeWidth), height(job.summary, width: narrativeWidth)) < 180
+            if !pairedNarrative && options.showReportedIssue { section("REPORTED ISSUE", value: job.issue) }
+            if pairedNarrative && layout == .editorial { narrativeColumns() }
+            let narrativeFirst = [.editorial, .precision, .copper].contains(layout)
+            if narrativeFirst && !pairedNarrative { section("WORK COMPLETED", value: job.summary) }
+            for pair in PDFMaker.photoPairs(before: photos.filter { $0.kind == .before }, after: photos.filter { $0.kind == .after }) { photoPair(pair) }
+            if pairedNarrative && layout == .blueprint { narrativeColumns() }
+            if !narrativeFirst && !pairedNarrative { section("WORK COMPLETED", value: job.summary) }
+            let materials = job.items.filter { $0.kind == .material && !$0.name.isEmpty }
+            if options.showMaterials && !materials.isEmpty {
+                ensure(52)
+                let label = photos.isEmpty ? "Materials Used" : "MATERIALS USED"
+                text(label, CGRect(x: x, y: y, width: width, height: 17), size: 9, bold: true, colour: ink); y += 23
                 if options.showPricesInReport {
-                    text(Money.format(Money.parse(item.unitPrice), currency: job.currencyCode), x: 379, y: y + 6, width: 85, size: 10, colour: navy)
-                    text(Money.format(item.total, currency: job.currencyCode), x: 465, y: y + 6, width: 75, size: 10, colour: navy, alignment: .right)
+                    text("ITEM / QTY", CGRect(x: x, y: y, width: width * 0.53, height: 13), size: 7, bold: true)
+                    text("UNIT PRICE", CGRect(x: x + width * 0.55, y: y, width: width * 0.22, height: 13), size: 7, bold: true)
+                    text("TOTAL", CGRect(x: x + width * 0.78, y: y, width: width * 0.22, height: 13), size: 7, bold: true, alignment: .right)
+                    y += 19
                 }
-                line(y + 24); y += 25
+                for item in materials {
+                    if options.showPricesInReport { pricedRow(item, report: true) }
+                    else { write("\(item.name)  × \(item.quantity)"); y += 5 }
+                }
+                y += 14
             }
-            y += 18
-        }
-        if options.showAdditionalNotes && !job.invoiceNotes.isEmpty {
-            textReportSection("Additional Notes", symbol: "note.text", value: job.invoiceNotes, y: &y, context: context, options: options)
-        }
-        if options.showTechnicianConfirmation && completed && job.technicianConfirmed && !job.technician.isEmpty {
-            ensure(98, y: &y, context: context, options: options)
-            let cardWidth = (contentWidth - 14) / 2
-            panel(CGRect(x: margin, y: y, width: cardWidth, height: 82), template: options.template)
-            panel(CGRect(x: margin + cardWidth + 14, y: y, width: cardWidth, height: 82), template: options.template)
-            text("COMPLETED BY", x: margin + 11, y: y + 10, width: cardWidth - 22, size: 10, bold: true, colour: navy)
-            text([job.technician, business, job.completedAt?.formatted(date: .abbreviated, time: .shortened) ?? ""].filter { !$0.isEmpty }.joined(separator: "\n"), x: margin + 11, y: y + 28, width: cardWidth - 22, height: 50, size: 10, colour: navy, wrap: true)
-            let signatureX = margin + cardWidth + 25
-            text("SIGNATURE (OPTIONAL)", x: signatureX, y: y + 10, width: cardWidth - 22, size: 10, bold: true, colour: navy)
-            let path = UIBezierPath(); path.move(to: CGPoint(x: signatureX, y: y + 61)); path.addLine(to: CGPoint(x: signatureX + cardWidth - 24, y: y + 61)); UIColor.lightGray.setStroke(); path.lineWidth = 0.7; path.stroke()
-            y += 97
-        }
-        if options.showClientAcknowledgement {
-            ensure(45, y: &y, context: context, options: options)
-            text("CLIENT ACKNOWLEDGEMENT (OPTIONAL)", x: margin, y: y, width: contentWidth, size: 10, bold: true, colour: navy)
-            text("Name: ____________________    Signature: ____________________    Date: __________", x: margin, y: y + 19, width: contentWidth, size: 9)
-        }
-        footer(job: job, options: options)
-    }
-
-    private static func textReportSection(_ title: String, symbol: String, value: String, y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
-        let width = contentWidth - 29
-        ensure(55, y: &y, context: context, options: options)
-        reportIcon(symbol, x: margin, y: y, size: 16)
-        text(title, x: margin + 29, y: y, width: width, size: 12, bold: true, colour: navy)
-        y += 26
-        paginatedText(value, x: margin + 29, width: width, size: 11, y: &y, context: context, options: options)
-        y += 8
-        ensure(17, y: &y, context: context, options: options)
-        line(y); y += 16
-    }
-
-    private static func reportIcon(_ symbol: String, x: CGFloat, y: CGFloat, size: CGFloat) {
-        drawPDFSymbol(symbol, in: CGRect(x: x, y: y + 1, width: size, height: size), colour: navy)
-    }
-
-    private static func drawPDFSymbol(_ symbol: String, in rect: CGRect, colour: UIColor) {
-        guard let source = UIImage(systemName: symbol)?.withTintColor(colour, renderingMode: .alwaysOriginal) else { return }
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
-        format.opaque = false
-        let raster = UIGraphicsImageRenderer(size: rect.size, format: format).image { _ in
-            source.draw(in: CGRect(origin: .zero, size: rect.size))
-        }
-        raster.draw(in: rect)
-    }
-
-    private static func drawInvoice(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
-        context.beginPage()
-        var y = header("INVOICE", job: job, profile: profile, options: options)
-        text("INVOICE", x: margin, y: y, width: 300, size: 28, bold: true, colour: navy)
-        text("Invoice #\(job.number)", x: 360, y: y + 2, width: 190, size: 11, bold: true, colour: navy)
-        y += 37
-        text("Issued \(job.createdAt.formatted(date: .abbreviated, time: .omitted))", x: margin, y: y, width: 250, size: 10)
-        if options.showDueDate { text("Due \(job.dueDate.formatted(date: .abbreviated, time: .omitted))", x: 360, y: y, width: 190, size: 10) }
-        y += 25
-        let half = (contentWidth - 10) / 2
-        let billTo = [job.clientName, job.siteAddress, job.clientEmail].filter { !$0.isEmpty }.joined(separator: "\n")
-        var fromDetails = [profile?.businessName ?? job.businessName]
-        if options.showBusinessDetails {
-            fromDetails += [profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil, profile?.address, profile?.phone, profile?.email].compactMap { $0 }
-        }
-        let from = fromDetails.filter { !$0.isEmpty }.joined(separator: "\n")
-        let textWidth = half - 20
-        let paragraphFont = UIFont.systemFont(ofSize: 10)
-        let textHeight = max(NSString(string: billTo).boundingRect(with: CGSize(width: textWidth, height: 600), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: paragraphFont], context: nil).height,
-                             NSString(string: from).boundingRect(with: CGSize(width: textWidth, height: 600), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: paragraphFont], context: nil).height)
-        let panelHeight = max(102, ceil(textHeight) + 35)
-        panel(CGRect(x: margin, y: y, width: half, height: panelHeight), template: options.template)
-        panel(CGRect(x: margin + half + 10, y: y, width: half, height: panelHeight), template: options.template)
-        text("BILL TO", x: margin + 10, y: y + 10, width: half - 20, size: 9, bold: true, colour: navy)
-        text(billTo, x: margin + 10, y: y + 27, width: textWidth, height: panelHeight - 31, size: 10, wrap: true)
-        text("FROM", x: margin + half + 20, y: y + 10, width: half - 20, size: 9, bold: true, colour: navy)
-        text(from, x: margin + half + 20, y: y + 27, width: textWidth, height: panelHeight - 31, size: 10, wrap: true)
-        y += panelHeight + 14
-        text("Job reference: \(job.number)  ·  \(job.title)", x: margin, y: y, width: contentWidth, size: 10, colour: .darkGray)
-        if job.paid { text("PAID", x: 500, y: y, width: 50, size: 10, bold: true, colour: green) }
-        y += 26
-        tableHeader(y: &y, template: options.template)
-        for (kind, heading) in [(PriceItem.Kind.material, "MATERIALS"), (.labour, "LABOUR"), (.charge, "ADDITIONAL CHARGES")] {
-            let items = job.items.filter { $0.kind == kind }
-            guard !items.isEmpty else { continue }
-            ensure(27, y: &y, context: context, options: options)
-            fill(CGRect(x: margin, y: y, width: contentWidth, height: 20), colour: templateTint(options.template))
-            text(heading, x: margin + 7, y: y + 4, width: 280, size: 8, bold: true, colour: navy); y += 21
-            for item in items {
-                ensure(27, y: &y, context: context, options: options)
-                text(item.name, x: margin + 7, y: y + 6, width: 250, size: 9)
-                text(item.quantity, x: 314, y: y + 6, width: 45, size: 9)
-                text(Money.format(Money.parse(item.unitPrice), currency: job.currencyCode), x: 376, y: y + 6, width: 80, size: 9)
-                text(Money.format(item.total, currency: job.currencyCode), x: 462, y: y + 6, width: 85, size: 9, alignment: .right)
-                line(y + 26); y += 27
+            if options.showTechnicianConfirmation && job.status == .completed && job.technicianConfirmed && !job.technician.isEmpty {
+                section("COMPLETED BY", value: [job.technician, profile?.businessName ?? job.businessName,
+                    job.completedAt?.formatted(date: .abbreviated, time: .shortened) ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
             }
+            if options.showClientAcknowledgement { section("CLIENT ACKNOWLEDGMENT (OPTIONAL)", value: "Name: ____________________\nSignature: ____________________    Date: __________") }
+            if options.showAdditionalNotes { section("ADDITIONAL NOTES", value: job.invoiceNotes) }
+            footer()
         }
-        let totals = InvoiceTotals(items: job.items, discount: options.showDiscount ? Money.parse(job.discount) : 0, taxRate: options.showTax ? Money.parse(job.taxRate) : 0)
-        ensure(145, y: &y, context: context, options: options); y += 17
-        amount("Subtotal", totals.subtotal, currency: job.currencyCode, y: &y)
-        if options.showDiscount && totals.discount > 0 { amount("Discount", -totals.discount, currency: job.currencyCode, y: &y) }
-        if options.showTax && totals.tax > 0 { amount("Tax / VAT (\(job.taxRate)%)", totals.tax, currency: job.currencyCode, y: &y) }
-        fill(CGRect(x: 333, y: y + 2, width: 218, height: 33), colour: templateTint(options.template))
-        amount("TOTAL DUE", totals.grandTotal, currency: job.currencyCode, y: &y, bold: true)
-        if options.showPaymentInstructions, let payment = profile?.paymentInstructions, !payment.isEmpty {
-            y += 15; section("PAYMENT DETAILS", y: &y); paragraph(payment, y: &y, context: context, options: options)
+        func narrativeColumns() {
+            let cell = (width - 24) / 2
+            let blockHeight = max(height(job.issue, width: cell - 20), height(job.summary, width: cell - 20)) + 40
+            ensure(blockHeight + 14)
+            for (index, entry) in [("REPORTED ISSUE", job.issue), ("WORK COMPLETED", job.summary)].enumerated() {
+                let left = x + CGFloat(index) * (cell + 24)
+                if layout == .blueprint { border(CGRect(x: left, y: y, width: cell, height: blockHeight)) }
+                else { rule(y, x: left, width: cell, colour: ink) }
+                text(entry.0, CGRect(x: left + 10, y: y + 10, width: cell - 20, height: 13), size: 8, bold: true, colour: ink)
+                text(entry.1, CGRect(x: left + 10, y: y + 29, width: cell - 20, height: blockHeight - 33), size: 10)
+            }
+            y += blockHeight + 18
         }
-        if options.showTerms && !job.invoiceNotes.isEmpty {
-            y += 10; section("TERMS & NOTES", y: &y); paragraph(job.invoiceNotes, y: &y, context: context, options: options)
-        }
-        footer(job: job, options: options)
-    }
-
-    private static func header(_ title: String, job: Job, profile: BusinessProfile?, options: DocumentOptions) -> CGFloat {
-        let business = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
-        let name = business.isEmpty ? "Your Business" : business
-        let contact = options.showBusinessDetails ? [profile?.phone, profile?.email, profile?.address,
-            title == "INVOICE" && profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil]
-            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  ·  ") : ""
-        if [.executive, .editorial, .precision, .copper, .horizon].contains(options.template) {
-            return collectionHeader(title, name: name, contact: contact, profile: profile, options: options)
-        }
-        if [.studio, .blueprint].contains(options.template) {
-            let template = options.template
-            let accent = templateAccent(template)
-            let darkHeader = template == .blueprint
-            let ink: UIColor = darkHeader ? .white : accent
-            let background = darkHeader ? accent : templateTint(template)
-            background.setFill()
-            UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 100)).fill()
-            if template == .studio {
-                accent.setFill()
-                UIBezierPath(rect: CGRect(x: margin, y: 23, width: 30, height: 3)).fill()
+        func photoPair(_ pair: (JobPhoto?, JobPhoto?)) {
+            if layout == .horizon { horizonPhotos(pair); return }
+            let stacked = layout == .copper
+            let h: CGFloat = stacked ? 105 : layout == .precision ? 132 : layout == .executive ? 133 : 174
+            let values = [(pair.0, "BEFORE"), (pair.1, "AFTER")].filter { $0.0 != nil }
+            let captions = layout == .classic || layout == .minimal || layout == .editorial
+            if stacked {
+                for (value, label) in values {
+                    ensure(h + 18); photo(value, label: label, box: CGRect(x: x, y: y, width: width, height: h), caption: false); y += h + 12
+                }
             } else {
-                let grid = UIBezierPath()
-                for x in stride(from: CGFloat(380), through: page.width, by: 18) {
-                    grid.move(to: CGPoint(x: x, y: 0)); grid.addLine(to: CGPoint(x: x, y: 100))
+                ensure(h + (captions ? 38 : 20))
+                let gap: CGFloat = 12
+                let firstWidth = values.count == 1 ? width : layout == .studio ? (width - gap) * 0.63 : (width - gap) / 2
+                for (index, value) in values.enumerated() {
+                    let photoX = index == 0 ? x : x + firstWidth + gap
+                    let photoWidth = index == 0 ? firstWidth : width - firstWidth - gap
+                    photo(value.0, label: value.1, box: CGRect(x: photoX, y: y, width: photoWidth, height: h), caption: captions)
                 }
-                for y in stride(from: CGFloat(10), through: CGFloat(100), by: 18) {
-                    grid.move(to: CGPoint(x: 380, y: y)); grid.addLine(to: CGPoint(x: page.width, y: y))
+                y += h + (captions ? 35 : 18)
+            }
+        }
+        // Horizon keeps the complete frame visible, including portrait and unmatched photos.
+        func horizonPhotos(_ pair: (JobPhoto?, JobPhoto?)) {
+            let values = [(pair.0, "BEFORE"), (pair.1, "AFTER")].compactMap { value, label -> (JobPhoto, String)? in
+                value.map { ($0, label) }
+            }
+            guard !values.isEmpty else { return }
+            let gap: CGFloat = 16
+            let cell = (width - CGFloat(values.count - 1) * gap) / CGFloat(values.count)
+            let naturalHeight = values.compactMap { PhotoStore.image($0.0.filename) }.map { image in
+                image.size.width > 0 ? cell * image.size.height / image.size.width : 180
+            }.max() ?? 180
+            let photoHeight = min(values.count == 1 ? 280 : 230, max(160, naturalHeight))
+            let captionSpace: CGFloat = options.showPhotoLabels ? 24 : 0
+            ensure(photoHeight + captionSpace + 18)
+            for (index, value) in values.enumerated() {
+                let box = CGRect(x: x + CGFloat(index) * (cell + gap), y: y, width: cell, height: photoHeight)
+                rect(box.minX, box.minY, box.width, box.height, tint, radius: 4)
+                if let image = PhotoStore.image(value.0.filename) {
+                    image.draw(in: PDFMaker.fittedPhotoRect(imageSize: image.size, in: box.insetBy(dx: 6, dy: 6)))
+                } else { text("Photo unavailable", box.insetBy(dx: 12, dy: 30), size: 9) }
+                if options.showPhotoLabels {
+                    text(value.1, CGRect(x: box.minX, y: box.maxY + 7, width: box.width, height: 14), size: 8, bold: true, colour: ink)
                 }
-                UIColor.white.withAlphaComponent(0.08).setStroke(); grid.lineWidth = 0.5; grid.stroke()
             }
-            var nameX = margin
-            if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
-                fill(CGRect(x: margin, y: 35, width: 42, height: 42), colour: .white)
-                aspectFill(logo, in: CGRect(x: margin + 3, y: 38, width: 36, height: 36))
-                nameX += 54
+            y += photoHeight + captionSpace + 18
+        }
+        func photo(_ value: JobPhoto?, label: String, box: CGRect, caption: Bool) {
+            if let value, let image = PhotoStore.image(value.filename) { PDFMaker.aspectFill(image, in: box) }
+            else { rect(box.minX, box.minY, box.width, box.height, tint); text("Photo unavailable", box.insetBy(dx: 12, dy: 30), size: 9) }
+            if layout == .blueprint { border(box, colour: ink) }
+            guard options.showPhotoLabels else { return }
+            if caption { text(label, CGRect(x: box.minX, y: box.maxY + 7, width: box.width, height: 13), size: 8, bold: true, colour: ink) }
+            else {
+                rect(box.minX + 7, box.minY + 7, 57, 19, ink, radius: 2)
+                text(label, CGRect(x: box.minX + 13, y: box.minY + 11, width: 45, height: 12), size: 7, bold: true, colour: .white)
             }
-            text(name, x: nameX, y: 34, width: 365 - nameX, size: 22, bold: template != .studio,
-                 colour: ink, design: template == .studio ? .serif : .default)
-            text(contact, x: nameX, y: 65, width: 551 - nameX, height: 28, size: 8,
-                 colour: ink.withAlphaComponent(0.8), wrap: true)
-            text(title, x: 399, y: 39, width: 152, size: 9, bold: true, colour: ink, alignment: .right)
-            return 118
         }
-        if options.template == .classic {
-            navy.setFill(); UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 96)).fill()
-            var x = margin
-            if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
-                fill(CGRect(x: margin, y: 29, width: 46, height: 46), colour: .white)
-                aspectFill(logo, in: CGRect(x: margin + 3, y: 32, width: 40, height: 40)); x += 58
+        func invoice() {
+            newPage(); letterhead(invoice: true)
+            let totals = InvoiceTotals(items: job.items, discount: options.showDiscount ? Money.parse(job.discount) : 0, taxRate: options.showTax ? Money.parse(job.taxRate) : 0)
+            let billTo = [job.clientName, job.siteAddress, job.clientEmail].filter { !$0.isEmpty }.joined(separator: "\n")
+            var from = [businessName]
+            if options.showBusinessDetails { from += [profile?.address, profile?.phone, profile?.email, profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil].compactMap { $0 }.filter { !$0.isEmpty } }
+            let dates = [("ISSUED", job.createdAt.formatted(date: .abbreviated, time: .omitted))] + (options.showDueDate ? [("DUE", job.dueDate.formatted(date: .abbreviated, time: .omitted))] : [])
+            if layout == .executive || layout == .copper { sidebar([("REFERENCE", job.number), ("BILL TO", billTo)] + dates + [("FROM", from.joined(separator: "\n"))]) }
+            let invoiceTitleY = y
+            title("INVOICE", size: layout == .editorial || layout == .minimal ? 34 : 27, centred: layout == .classic)
+            if layout == .horizon {
+                text("TOTAL DUE", CGRect(x: 331, y: invoiceTitleY - 4, width: 220, height: 12), size: 7, bold: true, colour: ink, alignment: .right)
+                text(Money.format(totals.grandTotal, currency: job.currencyCode), CGRect(x: 331, y: invoiceTitleY + 10, width: 220, height: 29), size: 23, bold: true, colour: ink, alignment: .right)
             }
-            text(name, x: x, y: 29, width: 365 - x, size: 21, bold: true, colour: .white)
-            text(contact, x: x, y: 59, width: 395, height: 28, size: 8, colour: UIColor.white.withAlphaComponent(0.8), wrap: true)
-            text(title, x: 419, y: 31, width: 132, size: 8, bold: true, colour: UIColor(red: 0.88, green: 0.75, blue: 0.51, alpha: 1), alignment: .right)
-            UIColor(red: 0.72, green: 0.56, blue: 0.31, alpha: 1).setFill()
-            UIBezierPath(rect: CGRect(x: 0, y: 96, width: page.width, height: 3)).fill()
-            return 117
-        }
-        if options.template == .minimal {
-            var x = margin
-            if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
-                aspectFill(logo, in: CGRect(x: margin, y: 31, width: 42, height: 42)); x += 54
+            if layout != .executive && layout != .copper {
+                write("\(job.number)  /  \(job.title)", size: 9); y += 10
+                if layout == .minimal { section("BILL TO", value: billTo); invoiceDates(dates) }
+                else if layout == .precision {
+                    fields([("BILL TO", billTo), ("FROM", from.joined(separator: "\n"))], columns: 2)
+                    invoiceDates(dates)
+                } else {
+                    fields([("BILL TO", billTo), ("FROM", from.joined(separator: "\n"))], columns: 2, boxed: [.classic, .blueprint].contains(layout))
+                    invoiceDates(dates)
+                }
+            } else { write(job.title, size: 10); y += 17 }
+            if job.paid { text("PAID", CGRect(x: x, y: y, width: width, height: 16), size: 10, bold: true, colour: ink); y += 24 }
+            ensure(65); tableHeader()
+            for (kind, label) in [(PriceItem.Kind.material, "MATERIALS"), (.labour, "LABOR"), (.charge, "ADDITIONAL CHARGES")] {
+                let items = job.items.filter { $0.kind == kind }; guard !items.isEmpty else { continue }
+                if y + 53 > 768 { footer(); newPage(); tableHeader() }
+                text(label, CGRect(x: x + 7, y: y + 6, width: width - 14, height: 13), size: 7, bold: true, colour: ink); y += 21
+                for item in items { pricedRow(item) }
             }
-            text(name, x: x, y: 30, width: 551 - x, size: 22, colour: navy, alignment: .center)
-            text(contact, x: x, y: 60, width: 551 - x, height: 25, size: 8, colour: .darkGray, alignment: .center, wrap: true)
-            line(93)
-            return 113
+            let totalRows = 2 + (options.showDiscount && totals.discount > 0 ? 1 : 0) + (options.showTax && totals.tax > 0 ? 1 : 0)
+            ensure(CGFloat(totalRows) * 27 + 28); y += 18
+            amount("Subtotal", totals.subtotal)
+            if options.showDiscount && totals.discount > 0 { amount("Discount", -totals.discount) }
+            if options.showTax && totals.tax > 0 { amount("Tax / VAT (\(job.taxRate)%)", totals.tax) }
+            amount("TOTAL DUE", totals.grandTotal, total: true)
+            y += 18
+            let payment = options.showPaymentInstructions ? profile?.paymentInstructions ?? "" : ""
+            let terms = options.showTerms ? job.invoiceNotes : ""
+            let noteWidth = (width - 24) / 2
+            let noteHeight = max(height(payment, width: noteWidth), height(terms, width: noteWidth)) + 27
+            if layout == .studio && !payment.isEmpty && !terms.isEmpty && noteHeight < 150 {
+                ensure(noteHeight)
+                for (index, entry) in [("PAYMENT DETAILS", payment), ("TERMS & NOTES", terms)].enumerated() {
+                    let left = x + CGFloat(index) * (noteWidth + 24)
+                    text(entry.0, CGRect(x: left, y: y, width: noteWidth, height: 15), size: 8, bold: true, colour: ink)
+                    text(entry.1, CGRect(x: left, y: y + 21, width: noteWidth, height: noteHeight - 21), size: 10)
+                }
+                y += noteHeight
+            } else {
+                section("PAYMENT DETAILS", value: payment)
+                section("TERMS & NOTES", value: terms)
+            }
+            footer()
         }
-        var nameX = margin
-        if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
-            aspectFill(logo, in: CGRect(x: margin, y: 39, width: 43, height: 43)); nameX += 54
+        func invoiceDates(_ entries: [(String, String)]) {
+            ensure(27)
+            let cell = width / CGFloat(max(entries.count, 1))
+            for (index, entry) in entries.enumerated() {
+                text("\(entry.0)  \(entry.1)", CGRect(x: x + CGFloat(index) * cell + 10, y: y, width: cell - 20, height: 15), size: 8, colour: .darkGray)
+            }
+            y += 27
         }
-        let businessName = profile?.businessName.isEmpty == false ? profile!.businessName : job.businessName
-        text(businessName.isEmpty ? "Your Business" : businessName, x: nameX, y: 42, width: 290, size: 18, bold: true, colour: navy)
-        if options.showBusinessDetails {
-            let contact = [profile?.phone, profile?.email, profile?.address, title == "INVOICE" && profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  ·  ")
-            text(contact, x: nameX, y: 67, width: 360, size: 8, colour: .darkGray)
+        func tableHeader() {
+            if layout == .studio { rule(y, colour: ink); y += 8; return }
+            let filled = [.modern, .executive, .blueprint, .horizon].contains(layout)
+            if filled { rect(x, y, width, 27, accent) }
+            else { rule(y, colour: ink, weight: layout == .classic ? 1.2 : 0.6); rule(y + 27, colour: ink) }
+            let colour = filled ? onAccent : ink
+            let labels: [(String, CGFloat, CGFloat)] = [("DESCRIPTION", 0.015, 0.47), ("QTY", 0.50, 0.09), ("RATE", 0.62, 0.16), ("AMOUNT", 0.80, 0.18)]
+            for (label, left, w) in labels { text(label, CGRect(x: x + width * left, y: y + 9, width: width * w, height: 13), size: 7, bold: true, colour: colour, alignment: label == "AMOUNT" ? .right : .left) }
+            y += 28
         }
-        text(title, x: 405, y: 45, width: 144, size: 9, bold: true, colour: blue, alignment: .right)
-        line(96)
-        return 111
+        func pricedRow(_ item: PriceItem, report: Bool = false) {
+            let card = layout == .studio && !report
+            let rowSize: CGFloat = layout == .precision ? 10 : 9
+            let descriptionWidth = width * (report ? 0.53 : card ? 0.75 : 0.47) - 10
+            let description = report ? "\(item.name) × \(item.quantity)" : item.name
+            var remaining = lines(description, width: descriptionWidth, size: card ? 11 : rowSize)
+            if remaining.isEmpty { remaining = [""] }
+            var first = true
+            repeat {
+                let rate = Money.format(Money.parse(item.unitPrice), currency: job.currencyCode)
+                let total = Money.format(item.total, currency: job.currencyCode)
+                let numericHeight = max(height(total, width: width * 0.18, size: rowSize),
+                    height(rate, width: width * (report ? 0.22 : 0.17), size: rowSize), height(item.quantity, width: width * 0.1, size: rowSize))
+                let minimum: CGFloat = max(card ? 43 : 26, numericHeight + 16)
+                if y + minimum > 768 { footer(); newPage(); if !report { tableHeader() } }
+                let lineHeight: CGFloat = card ? 16 : ceil(font(rowSize).lineHeight) + 2
+                let capacity = max(1, Int((768 - y - (card ? 27 : 13)) / lineHeight))
+                let count = min(capacity, remaining.count)
+                let chunk = Array(remaining.prefix(count)); remaining.removeFirst(count)
+                let h = max(minimum, CGFloat(count) * lineHeight + (card ? 27 : 13))
+                if card { rect(x, y + 3, width, h - 6, tint, radius: 5) }
+                if layout == .blueprint { border(CGRect(x: x, y: y, width: width, height: h)) }
+                for (index, line) in chunk.enumerated() { text(line, CGRect(x: x + 7, y: y + 8 + CGFloat(index) * lineHeight, width: descriptionWidth, height: lineHeight), size: card ? 11 : rowSize) }
+                if first {
+                    if card {
+                        text("\(item.quantity) × \(rate)", CGRect(x: x + 7, y: y + h - 20, width: width * 0.6, height: 14), size: 9, colour: .darkGray)
+                    } else if !report { text(item.quantity, CGRect(x: x + width * 0.50, y: y + 8, width: width * 0.1, height: h - 12), size: rowSize) }
+                    if !card { text(rate, CGRect(x: x + width * (report ? 0.55 : 0.62), y: y + 8, width: width * (report ? 0.22 : 0.17), height: h - 12), size: rowSize) }
+                    text(Money.format(item.total, currency: job.currencyCode), CGRect(x: x + width * 0.8, y: y + 8, width: width * 0.18, height: h - 12), size: rowSize, bold: card, alignment: .right)
+                }
+                if !card { rule(y + h) }
+                y += h; first = false
+            } while !remaining.isEmpty
+        }
+        func amount(_ label: String, _ value: Decimal, total: Bool = false) {
+            let full = [.minimal, .horizon, .precision].contains(layout)
+            let w = full ? width : min(width, 245)
+            let left = x + width - w
+            let labelSize: CGFloat = total ? 10 : 9
+            let valueSize: CGFloat = total ? 11 : 9
+            let valueText = Money.format(value, currency: job.currencyCode)
+            let rowHeight = max(total ? 36 : 23, max(height(label, width: w * 0.58 - 10, size: labelSize, bold: total),
+                height(valueText, width: w * 0.41 - 8, size: valueSize, bold: total)) + 12)
+            ensure(rowHeight)
+            if total {
+                if layout == .classic || layout == .editorial || layout == .minimal { rule(y, x: left, width: w, colour: ink, weight: 1) }
+                else { rect(left, y, w, rowHeight - 3, tint, radius: 3) }
+            }
+            text(label, CGRect(x: left + 8, y: y + 8, width: w * 0.58 - 10, height: rowHeight - 12), size: total ? 10 : 9, bold: total, colour: total ? ink : navy)
+            text(Money.format(value, currency: job.currencyCode), CGRect(x: left + w * 0.59, y: y + 8, width: w * 0.41 - 8, height: rowHeight - 12), size: total ? 11 : 9, bold: total, colour: total ? ink : navy, alignment: .right)
+            y += rowHeight
+        }
     }
 
-    private static func collectionHeader(_ title: String, name: String, contact: String, profile: BusinessProfile?, options: DocumentOptions) -> CGFloat {
-        let template = options.template
-        let accent = templateAccent(template)
-        let logo = options.showLogo ? profile.flatMap({ PhotoStore.image($0.logoFilename) }) : nil
-        switch template {
-        case .executive:
-            // A compact dark masthead with the contact line on white below it.
-            fill(CGRect(x: margin, y: 26, width: contentWidth, height: 58), colour: accent)
-            var x = margin + 16
-            if let logo {
-                fill(CGRect(x: x, y: 36, width: 38, height: 38), colour: .white)
-                aspectFill(logo, in: CGRect(x: x + 3, y: 39, width: 32, height: 32)); x += 50
-            }
-            text(name, x: x, y: 43, width: 381 - x, size: 20, bold: true, colour: .white)
-            text(title, x: 391, y: 49, width: 144, size: 8, bold: true, colour: .white, alignment: .right)
-            text(contact, x: margin, y: 92, width: contentWidth, height: 22, size: 8, colour: .darkGray, wrap: true)
-        case .editorial:
-            // An open, typographic letterhead with a fine double rule.
-            var x = margin
-            if let logo { aspectFill(logo, in: CGRect(x: x, y: 31, width: 40, height: 40)); x += 54 }
-            text(title, x: x, y: 26, width: 551 - x, size: 8, bold: true, colour: accent)
-            text(name, x: x, y: 42, width: 551 - x, size: 26, colour: accent, design: .serif)
-            text(contact, x: x, y: 77, width: 551 - x, height: 24, size: 8, colour: .darkGray, wrap: true)
-            headerRule(y: 108, colour: accent, thickness: 1.5)
-            headerRule(y: 112, colour: accent, thickness: 0.4)
-        case .precision:
-            // A technical document label beside an independent business column.
-            accent.setFill()
-            UIBezierPath(rect: CGRect(x: margin, y: 28, width: 125, height: 60)).fill()
-            text(title.replacingOccurrences(of: " ", with: "\n"), x: margin + 12, y: 40, width: 101, height: 40,
-                 size: 12, bold: true, colour: .white, wrap: true, design: .monospaced)
-            let x: CGFloat = logo == nil ? 190 : 239
-            if let logo { aspectFill(logo, in: CGRect(x: 190, y: 31, width: 36, height: 36)) }
-            text(name, x: x, y: 31, width: 551 - x, size: 20, bold: true, colour: accent)
-            text(contact, x: 190, y: 61, width: 361, height: 38, size: 8, colour: .darkGray, wrap: true)
-            headerRule(y: 109, colour: accent, thickness: 1)
-        case .copper:
-            // Warm paper, a narrow copper rail and a right-aligned document label.
-            templateTint(template).setFill()
-            UIBezierPath(rect: CGRect(x: margin, y: 24, width: contentWidth, height: 85)).fill()
-            accent.setFill()
-            UIBezierPath(rect: CGRect(x: margin, y: 24, width: 4, height: 85)).fill()
-            var x = margin + 18
-            if let logo { aspectFill(logo, in: CGRect(x: x, y: 38, width: 38, height: 38)); x += 50 }
-            text(name, x: x, y: 36, width: 382 - x, size: 23, colour: accent, design: .serif)
-            text(title, x: 395, y: 42, width: 140, size: 8, bold: true, colour: accent, alignment: .right)
-            text(contact, x: x, y: 70, width: 535 - x, height: 29, size: 8, colour: .darkGray, wrap: true)
-        case .horizon:
-            // Asymmetric colour blocks keep the business identity on white.
-            accent.setFill()
-            UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 7)).fill()
-            fill(CGRect(x: 405, y: 29, width: 146, height: 34), colour: accent)
-            text(title, x: 413, y: 41, width: 130, size: 8, bold: true, colour: .white, alignment: .center)
-            var x = margin
-            if let logo { aspectFill(logo, in: CGRect(x: x, y: 32, width: 38, height: 38)); x += 50 }
-            text(name, x: x, y: 34, width: 387 - x, size: 23, bold: true, colour: accent)
-            text(contact, x: x, y: 73, width: 551 - x, height: 27, size: 8, colour: .darkGray, wrap: true)
-            headerRule(y: 110, colour: templateTint(template), thickness: 3)
-        default: break
-        }
-        return 126
+    static func fittedPhotoRect(imageSize: CGSize, in bounds: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let scale = min(bounds.width / imageSize.width, bounds.height / imageSize.height)
+        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height)
     }
 
-    private static func headerRule(y: CGFloat, colour: UIColor, thickness: CGFloat) {
-        colour.setFill()
-        UIBezierPath(rect: CGRect(x: margin, y: y, width: contentWidth, height: thickness)).fill()
-    }
-
-    private static func photo(_ value: JobPhoto?, title: String, x: CGFloat, y: CGFloat, width: CGFloat = 249, showLabel: Bool = true) {
-        let box = CGRect(x: x, y: y, width: width, height: 187)
-        if let value, let image = PhotoStore.image(value.filename) { aspectFill(image, in: box) }
-        else {
-            fill(box, colour: pale)
-            text("Photo unavailable", x: x + 20, y: y + 82, width: width - 40, size: 11, colour: .gray, alignment: .center)
-        }
-        guard showLabel else { return }
-        fill(CGRect(x: x, y: y, width: 66, height: 23), colour: title == "AFTER" ? green : navy)
-        text(title, x: x + 8, y: y + 5, width: 55, size: 9, bold: true, colour: .white)
-    }
-
-    private static func section(_ title: String, y: inout CGFloat) {
-        text(title, x: margin, y: y, width: contentWidth, size: 10, bold: true, colour: navy); y += 18
-    }
-    private static func paragraph(_ value: String, y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
-        paginatedText(value, x: margin, width: contentWidth, size: 10, y: &y, context: context, options: options)
-        y += 8
-    }
-    private static func paginatedText(_ value: String, x: CGFloat, width: CGFloat, size: CGFloat,
-                                      y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
-        let storage = NSTextStorage(string: value, attributes: [.font: UIFont.systemFont(ofSize: size), .foregroundColor: navy])
-        let layout = NSLayoutManager()
-        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        storage.addLayoutManager(layout)
-        layout.addTextContainer(container)
-        layout.ensureLayout(for: container)
-        var lines: [(NSRange, CGRect)] = []
-        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { rect, _, _, range, _ in
-            lines.append((range, rect))
-        }
-        for (range, rect) in lines {
-            let height = ceil(rect.height)
-            ensure(height, y: &y, context: context, options: options)
-            layout.drawGlyphs(forGlyphRange: range, at: CGPoint(x: x, y: y - rect.minY))
-            y += height
-        }
-    }
-    private static func tableHeader(y: inout CGFloat, template: DocumentTemplate) {
-        fill(CGRect(x: margin, y: y, width: contentWidth, height: 29), colour: [.minimal, .studio, .editorial, .precision].contains(template) ? templateTint(template) : templateAccent(template))
-        let colour: UIColor = [.minimal, .studio, .editorial, .precision].contains(template) ? templateAccent(template) : .white
-        text("DESCRIPTION", x: margin + 7, y: y + 9, width: 240, size: 8, bold: true, colour: colour)
-        text("QTY / HOURS", x: 314, y: y + 9, width: 63, size: 8, bold: true, colour: colour)
-        text("RATE", x: 386, y: y + 9, width: 65, size: 8, bold: true, colour: colour)
-        text("AMOUNT", x: 474, y: y + 9, width: 72, size: 8, bold: true, colour: colour, alignment: .right)
-        y += 29
-    }
-    private static func amount(_ title: String, _ value: Decimal, currency: String, y: inout CGFloat, bold: Bool = false) {
-        text(title, x: 344, y: y + 7, width: 105, size: bold ? 12 : 10, bold: bold, colour: navy)
-        text(Money.format(value, currency: currency), x: 453, y: y + 7, width: 94, size: bold ? 12 : 10, bold: bold, colour: navy, alignment: .right)
-        y += bold ? 38 : 24
-    }
-    private static func ensure(_ height: CGFloat, y: inout CGFloat, context: UIGraphicsPDFRendererContext, options: DocumentOptions) {
-        if y + height > 772 { footer(job: nil, options: options); context.beginPage(); y = 48 }
-    }
-    private static func footer(job: Job?, options: DocumentOptions) {
-        line(797)
-        if options.showFixRecordBranding { text("Created with FixRecord", x: margin, y: 807, width: 230, size: 8, colour: .darkGray) }
-        else if let job { text(job.businessName, x: margin, y: 807, width: 230, size: 8, colour: .darkGray) }
-        if let job { text(job.number, x: 430, y: 807, width: 117, size: 8, colour: .darkGray, alignment: .right) }
-    }
-    private static func panel(_ rect: CGRect, template: DocumentTemplate) {
-        if template == .editorial || template == .precision {
-            let border = UIBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
-            templateAccent(template).withAlphaComponent(0.25).setStroke()
-            border.lineWidth = 0.5; border.stroke()
-            return
-        }
-        if template != .minimal { fill(rect, colour: templateTint(template)) }
-        if template == .blueprint || template == .studio {
-            templateAccent(template).setFill()
-            UIBezierPath(rect: CGRect(x: rect.minX + 10, y: rect.minY, width: 24, height: 2)).fill()
-        }
-        if template == .classic {
-            UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1).setFill()
-            UIBezierPath(rect: rect).fill()
-            UIColor(red: 0.72, green: 0.56, blue: 0.31, alpha: 1).setFill()
-            UIBezierPath(rect: CGRect(x: rect.minX, y: rect.minY, width: 2, height: rect.height)).fill()
-        }
-        if template == .minimal {
-            let rule = UIBezierPath(); rule.move(to: CGPoint(x: rect.minX + 9, y: rect.maxY)); rule.addLine(to: CGPoint(x: rect.maxX - 9, y: rect.maxY))
-            UIColor.lightGray.setStroke(); rule.lineWidth = 0.5; rule.stroke()
-        }
-    }
-    private static func templateAccent(_ template: DocumentTemplate) -> UIColor {
-        switch template {
-        case .studio: return UIColor(red: 0.35, green: 0.25, blue: 0.20, alpha: 1)
-        case .executive: return UIColor(red: 0.16, green: 0.19, blue: 0.23, alpha: 1)
-        case .editorial: return UIColor(red: 0.26, green: 0.19, blue: 0.25, alpha: 1)
-        case .precision: return UIColor(white: 0.15, alpha: 1)
-        case .copper: return UIColor(red: 0.53, green: 0.26, blue: 0.16, alpha: 1)
-        case .horizon: return UIColor(red: 0.24, green: 0.25, blue: 0.56, alpha: 1)
-        case .blueprint: return UIColor(red: 0.10, green: 0.26, blue: 0.47, alpha: 1)
-        default: return navy
-        }
-    }
-    private static func templateTint(_ template: DocumentTemplate) -> UIColor {
-        switch template {
-        case .classic: return UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1)
-        case .studio: return UIColor(red: 0.98, green: 0.96, blue: 0.92, alpha: 1)
-        case .executive, .precision: return UIColor(white: 0.96, alpha: 1)
-        case .editorial: return UIColor(red: 0.97, green: 0.95, blue: 0.96, alpha: 1)
-        case .copper: return UIColor(red: 0.98, green: 0.95, blue: 0.91, alpha: 1)
-        case .horizon: return UIColor(red: 0.95, green: 0.95, blue: 0.99, alpha: 1)
-        case .blueprint: return UIColor(red: 0.93, green: 0.96, blue: 0.99, alpha: 1)
-        default: return pale
-        }
-    }
-    private static func fill(_ rect: CGRect, colour: UIColor) { colour.setFill(); UIBezierPath(roundedRect: rect, cornerRadius: 5).fill() }
-    private static func line(_ y: CGFloat) { let path = UIBezierPath(); path.move(to: CGPoint(x: margin, y: y)); path.addLine(to: CGPoint(x: 551, y: y)); UIColor.lightGray.setStroke(); path.lineWidth = 0.6; path.stroke() }
     private static func aspectFill(_ image: UIImage, in rect: CGRect) {
         guard image.size.width > 0, image.size.height > 0, let graphics = UIGraphicsGetCurrentContext() else { return }
-        graphics.saveGState(); graphics.addPath(UIBezierPath(roundedRect: rect, cornerRadius: 5).cgPath); graphics.clip()
+        graphics.saveGState(); graphics.addPath(UIBezierPath(roundedRect: rect, cornerRadius: 3).cgPath); graphics.clip()
         let scale = max(rect.width / image.size.width, rect.height / image.size.height)
         let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
         image.draw(in: CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
         graphics.restoreGState()
-    }
-    private static func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat = 40, size: CGFloat, bold: Bool = false, colour: UIColor = .black, alignment: NSTextAlignment = .left, wrap: Bool = false, design: UIFontDescriptor.SystemDesign = .default) {
-        let style = NSMutableParagraphStyle(); style.alignment = alignment; style.lineBreakMode = wrap ? .byWordWrapping : .byTruncatingTail
-        let baseFont = bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size)
-        let font = UIFont(descriptor: baseFont.fontDescriptor.withDesign(design) ?? baseFont.fontDescriptor, size: size)
-        NSString(string: value).draw(in: CGRect(x: x, y: y, width: width, height: height), withAttributes: [.font: font, .foregroundColor: colour, .paragraphStyle: style])
     }
 }

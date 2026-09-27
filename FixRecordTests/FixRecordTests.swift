@@ -5,9 +5,135 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testReceiptTableExcludesSummaryMergedWithNotes() {
+        let result = ReceiptParser.parse([
+            "No. Description Quantity Unit Price Total",
+            "1 Men's Classic Tee 1 $19.90 $19.90",
+            "2 Women's V-Neck Tee 1 $9.90 $9.90",
+            "3 Kids' Crew Neck Tee 4 $9.90 $39.60",
+            "Note: Sub Total: $69.40", "Note Tax: $10.00", "Total: $79.40"
+        ])
+        XCTAssertEqual(result.items.map(\.name), ["Men's Classic Tee", "Women's V-Neck Tee", "Kids' Crew Neck Tee"])
+        XCTAssertEqual(result.items.map(\.quantity), ["1", "1", "4"])
+        XCTAssertEqual(result.items.map(\.unitPrice), ["19.9", "9.9", "9.9"])
+        XCTAssertEqual(result.items.reduce(Decimal.zero) { $0 + $1.total }, Decimal(string: "69.40"))
+    }
+
+    func testReceiptTableRecoversMissingQuantityAndFlagsIt() {
+        let result = ReceiptParser.parse([
+            "Item HRS/QTY Rate Subtotal",
+            "Polo Republica Short Sleeved T-Shirt 45.00 USD 180.00",
+            "Polo Signature Harrington Jacket 1 100.00 USD 100.00",
+            "SwissGear Art 7602 Urban Backpack 1 130.00 USD 130.00",
+            "Mosaga Long Sleeve Fleece Sweatshirt 2 60.00 USD 120.00",
+            "Subtotal USD 530.00", "Total USD 530.00"
+        ])
+        XCTAssertEqual(result.items.map(\.quantity), ["4", "1", "1", "2"])
+        XCTAssertEqual(result.items.map(\.unitPrice), ["45", "100", "130", "60"])
+        XCTAssertEqual(result.items.reduce(Decimal.zero) { $0 + $1.total }, 530)
+        XCTAssertTrue(result.uncertainItems.contains(result.items[0].id))
+    }
+
+    func testReceiptTablePreservesCostWhenColumnsConflict() {
+        let result = ReceiptParser.parse(["Description Qty Rate Total", "Bolt 3 2.00 4.00"])
+        XCTAssertEqual(result.items.first?.name, "Bolt")
+        XCTAssertEqual(result.items.first?.total, 4)
+        XCTAssertEqual(result.uncertainItems.count, 1)
+    }
+
+    func testTemplateColorsStayIndependentAndSupportExplicitApplyToAll() throws {
+        var options = DocumentOptions()
+        options.brandColourHex = "112233"
+        options.setColour("AA2233", for: .modern)
+        XCTAssertEqual(options.colour(for: .classic), "112233")
+        options.template = .classic
+        options.selectedColour = "2244BB"
+        XCTAssertEqual(options.colour(for: .modern), "AA2233")
+        XCTAssertEqual(options.colour(for: .classic), "2244BB")
+        let restored = try JSONDecoder().decode(DocumentOptions.self, from: JSONEncoder().encode(options))
+        XCTAssertEqual(restored, options)
+        XCTAssertNil(restored.effective(isPro: false).colour(for: .classic))
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(options)) as? [String: Any])
+        legacy.removeValue(forKey: "templateColours")
+        XCTAssertEqual(try JSONDecoder().decode(DocumentOptions.self, from: JSONSerialization.data(withJSONObject: legacy)).colour(for: .classic), "112233")
+        options.setColourForAll("334455")
+        for template in DocumentTemplate.allCases { XCTAssertEqual(options.colour(for: template), "334455") }
+        options.setColour("778899", for: .classic)
+        XCTAssertEqual(options.colour(for: .modern), "334455")
+    }
+
+    func testTemplateCacheReusesPDFAndRefreshesAfterAccessChanges() async throws {
+        let key = "test-" + UUID().uuidString
+        let free = try await TemplatePreviewCache.load(template: .modern, key: key,
+            options: DocumentOptions(), business: nil, isPro: false, includePhotos: false)
+        let cached = try await TemplatePreviewCache.load(template: .modern, key: key,
+            options: DocumentOptions(), business: nil, isPro: false, includePhotos: false)
+        XCTAssertEqual(free.document, cached.document)
+        XCTAssertEqual(free.images, cached.images)
+        XCTAssertEqual(cached.images.count, 2)
+        XCTAssertTrue(try XCTUnwrap(PDFDocument(data: cached.document)?.string).contains("Created with FixRecord"))
+        let pro = try await TemplatePreviewCache.load(template: .modern, key: key + "-pro",
+            options: DocumentOptions(), business: nil, isPro: true, includePhotos: false)
+        XCTAssertFalse(try XCTUnwrap(PDFDocument(data: pro.document)?.string).contains("Created with FixRecord"))
+        let expired = try await TemplatePreviewCache.load(template: .modern, key: key,
+            options: DocumentOptions(), business: nil, isPro: false, includePhotos: false)
+        XCTAssertTrue(try XCTUnwrap(PDFDocument(data: expired.document)?.string).contains("Created with FixRecord"))
+    }
+
+    func testJobSortOrdersAndPins() {
+        let alpha = SampleJob.make(); alpha.title = "Alpha"; alpha.createdAt = Date(timeIntervalSince1970: 10); alpha.updatedAt = nil
+        let bravo = SampleJob.make(); bravo.title = "Bravo"; bravo.createdAt = Date(timeIntervalSince1970: 20); bravo.updatedAt = nil
+        let charlie = SampleJob.make(); charlie.title = "Charlie"; charlie.createdAt = Date(timeIntervalSince1970: 30); charlie.updatedAt = Date(timeIntervalSince1970: 5)
+        let jobs = [charlie, alpha, bravo]
+        XCTAssertEqual(JobSortOrder.nameAscending.sorted(jobs).map(\.title), ["Alpha", "Bravo", "Charlie"])
+        XCTAssertEqual(JobSortOrder.nameDescending.sorted(jobs).map(\.title), ["Charlie", "Bravo", "Alpha"])
+        XCTAssertEqual(JobSortOrder.newestCreated.sorted(jobs).map(\.title), ["Charlie", "Bravo", "Alpha"])
+        XCTAssertEqual(JobSortOrder.oldestCreated.sorted(jobs).map(\.title), ["Alpha", "Bravo", "Charlie"])
+        XCTAssertEqual(JobSortOrder.recentlyUpdated.sorted(jobs).map(\.title), ["Bravo", "Alpha", "Charlie"])
+        alpha.isPinned = true
+        for order in JobSortOrder.allCases { XCTAssertEqual(order.sorted(jobs).first?.id, alpha.id) }
+    }
+
+    func testJobEditsTrackRecentChangesWithoutChangingCreationDate() {
+        let job = SampleJob.make()
+        let created = job.createdAt
+        job.updatedAt = nil
+        let before = [JobEditSnapshot(job)]
+        job.roughNote = "New work note"
+        JobEditSnapshot.recordChanges(from: before, in: [job])
+        let changed = job.updatedAt
+        XCTAssertNotNil(changed)
+        XCTAssertEqual(job.createdAt, created)
+        let unchanged = [JobEditSnapshot(job)]
+        job.roughNote = "New work note"
+        JobEditSnapshot.recordChanges(from: unchanged, in: [job])
+        XCTAssertEqual(job.updatedAt, changed)
+        job.isPinned = true
+        XCTAssertFalse(job.duplicated(number: "COPY").isPinned)
+    }
+
+    func testLogoSizeKeepsLegacyDefaultsAndClampsSavedValues() throws {
+        var options = DocumentOptions()
+        XCTAssertEqual(options.logoSize, 100)
+        options.logoSize = 150
+        let data = try JSONEncoder().encode(options)
+        XCTAssertEqual(try JSONDecoder().decode(DocumentOptions.self, from: data).logoSize, 150)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "logoSizePercent")
+        XCTAssertEqual(try JSONDecoder().decode(DocumentOptions.self, from: JSONSerialization.data(withJSONObject: legacy)).logoSize, 100)
+        options.logoSizePercent = 500
+        XCTAssertEqual(options.logoSize, 200)
+        options.logoSizePercent = 0
+        XCTAssertEqual(options.logoSize, 50)
+        options.logoSizePercent = .nan
+        XCTAssertEqual(options.logoSize, 100)
+    }
+
     func testEditingDocumentDetailsPreservesCurrentPricing() {
         let job = SampleJob.make()
-        job.applyPreset(SavedPreset.custom(profile: nil), includeJobDefaults: false)
+        var saved = SavedPreset.custom(profile: nil)
+        saved.name = "Standard repair"
+        job.applyPreset(saved, includeJobDefaults: false)
         job.taxRate = "15"
         let originalTotal = InvoiceTotals(items: job.items, discount: Money.parse(job.discount), taxRate: Money.parse(job.taxRate)).grandTotal
         var draft = job.documentPresetDraft(fallback: nil)
@@ -15,6 +141,9 @@ final class FixRecordTests: XCTestCase {
         job.applyPreset(draft, includeJobDefaults: false)
         XCTAssertEqual(job.taxRate, "15")
         XCTAssertEqual(job.businessName, "Updated business")
+        XCTAssertEqual(job.documentPreset?.name, "Standard repair")
+        XCTAssertNotEqual(job.documentPreset?.id, saved.id)
+        XCTAssertEqual(saved.business.businessName, "")
         XCTAssertEqual(InvoiceTotals(items: job.items, discount: Money.parse(job.discount), taxRate: Money.parse(job.taxRate)).grandTotal, originalTotal)
     }
 
@@ -206,7 +335,7 @@ final class FixRecordTests: XCTestCase {
 
         XCTAssertEqual(job.currencyCode, "EUR")
         XCTAssertEqual(job.documentPreset?.business.currencyCode, "EUR")
-        XCTAssertEqual(job.documentPreset?.name, "Custom")
+        XCTAssertEqual(job.documentPreset?.name, "Standard")
         XCTAssertNotEqual(job.documentPreset?.id, saved.id)
         XCTAssertEqual(saved.business.currencyCode, "USD")
     }
@@ -521,6 +650,83 @@ final class FixRecordTests: XCTestCase {
             }
         }
     }
+    func testEveryReportLayoutPreservesClientEmailAndStatus() throws {
+        let job = SampleJob.make()
+        job.clientEmail = "client@example.com"
+        job.status = .completed
+        for template in DocumentTemplate.allCases {
+            var options = DocumentOptions(); options.template = template
+            let pdf = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options, isPro: true, includePhotos: false)))
+            XCTAssertTrue((pdf.string ?? "").contains(job.clientEmail), template.rawValue)
+            XCTAssertTrue((pdf.string ?? "").contains(job.status.rawValue), template.rawValue)
+        }
+    }
+
+    func testHorizonPhotoFramesPreservePortraitAndLandscapeContent() {
+        let box = CGRect(x: 50, y: 70, width: 240, height: 220)
+        for size in [CGSize(width: 600, height: 1200), CGSize(width: 1600, height: 600), CGSize(width: 800, height: 800)] {
+            let fitted = PDFMaker.fittedPhotoRect(imageSize: size, in: box)
+            XCTAssertTrue(box.insetBy(dx: -0.01, dy: -0.01).contains(fitted))
+            XCTAssertEqual(fitted.width / fitted.height, size.width / size.height, accuracy: 0.001)
+            XCTAssertEqual(fitted.midX, box.midX, accuracy: 0.001)
+            XCTAssertEqual(fitted.midY, box.midY, accuracy: 0.001)
+        }
+    }
+
+    func testRefinedLayoutsPreserveLongDetailsAndMultiPageInvoices() throws {
+        let job = SampleJob.make()
+        let profile = BusinessProfile()
+        profile.businessName = "Williams Property Maintenance and Professional Repair Services"
+        job.clientName = "Alexandra Williams and Christopher Mitchell"
+        job.items = (1...30).map { PriceItem(kind: .material, name: "Replacement component \($0)", quantity: "2", unitPrice: "125.50") }
+        for layout in [DocumentTemplate.blueprint, .precision, .horizon] {
+            var options = DocumentOptions(); options.template = layout
+            let pdf = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .pack, job: job, profile: profile, options: options, isPro: true)))
+            let words = (pdf.string ?? "").components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+            XCTAssertTrue(words.contains(profile.businessName), layout.rawValue)
+            XCTAssertTrue(words.contains(job.clientName), layout.rawValue)
+            for item in job.items { XCTAssertTrue(words.contains(item.name), layout.rawValue) }
+            XCTAssertTrue(words.contains("TOTAL DUE"), layout.rawValue)
+            XCTAssertGreaterThan(pdf.pageCount, 2)
+        }
+    }
+
+    func testBrandColourPreservesLegacyOptionsAndRequiresPro() throws {
+        var options = DocumentOptions()
+        options.template = .studio
+        options.brandColourHex = "9A4D30"
+        let saved = try JSONEncoder().encode(options)
+        let restored = try JSONDecoder().decode(DocumentOptions.self, from: saved)
+        XCTAssertEqual(restored.brandColourHex, "9A4D30")
+        XCTAssertEqual(restored.effective(isPro: true).brandColourHex, "9A4D30")
+        XCTAssertNil(restored.effective(isPro: false).brandColourHex)
+        XCTAssertEqual(restored.effective(isPro: false).template, .modern)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        legacy.removeValue(forKey: "brandColourHex")
+        let oldPreset = try JSONDecoder().decode(DocumentOptions.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(oldPreset.template, .studio)
+        XCTAssertNil(oldPreset.brandColourHex)
+        XCTAssertEqual(DocumentColour.normalise(" #9a4d30 "), "9A4D30")
+        XCTAssertNil(DocumentColour.normalise("not a colour"))
+    }
+
+    func testCustomColourLayoutsKeepInvoiceValuesWithoutDuplicateHeaderLabels() throws {
+        let job = SampleJob.make()
+        for template in DocumentTemplate.allCases {
+            var options = DocumentOptions()
+            options.template = template; options.brandColourHex = "FFEEAA"
+            let invoice = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .invoice, job: job, profile: nil, options: options, isPro: true)))
+            let words = invoice.string ?? ""
+            XCTAssertEqual(words.components(separatedBy: "INVOICE").count - 1, 1, template.rawValue)
+            for item in job.items { XCTAssertTrue(words.contains(item.name), template.rawValue) }
+            let total = InvoiceTotals(items: job.items, discount: Money.parse(job.discount), taxRate: Money.parse(job.taxRate)).grandTotal
+            XCTAssertTrue(words.contains(Money.format(total, currency: job.currencyCode)), template.rawValue)
+            let report = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options, isPro: true)))
+            XCTAssertFalse((report.string ?? "").contains("WORK REPORT"), template.rawValue)
+            XCTAssertTrue((report.string ?? "").contains(job.title), template.rawValue)
+        }
+    }
+
     func testRetiredSageTemplatePreservesSavedDocumentOptions() throws {
         var options = DocumentOptions()
         options.template = .executive
@@ -603,7 +809,7 @@ final class FixRecordTests: XCTestCase {
     func testFreeBrandingAndProOptionalReportSections() throws {
         let job = SampleJob.make()
         var options = DocumentOptions()
-        options.showFixRecordBranding = false
+        options.showFixRecordBranding = true
         options.showReportedIssue = false
         options.showMaterials = false
         let free = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options)))

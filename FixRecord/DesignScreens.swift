@@ -270,6 +270,8 @@ private struct JobPhotoSection: View {
                             Text("Before \(index + 1)").tag(Optional(photo.id))
                         }
                     }.pickerStyle(.menu).font(.subheadline)
+                    Text("Choose which before photo this after photo matches.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 12) {
                     NavigationLink {
@@ -426,12 +428,10 @@ struct SettingsView: View {
                 else { Button { let value = BusinessProfile(); context.insert(value); editingProfile = value } label: { Label("Business Details", systemImage: "building.2") } }
                 NavigationLink { JobDefaultsView() } label: { Label("Job Defaults", systemImage: "slider.horizontal.3") }
                 NavigationLink { DocumentSettingsView() } label: { Label("Document Settings", systemImage: "slider.horizontal.3") }
-                NavigationLink { TemplatesView() } label: { Label("Templates", systemImage: "doc.text") }
                 NavigationLink { PresetsView(profile: profile) } label: { Label("Saved Presets", systemImage: "square.on.square") }
                 NavigationLink { DataManagementView() } label: { Label("Data Management", systemImage: "externaldrive") }
             }
             Section {
-                NavigationLink { AIAccessCodeView() } label: { Label("AI Access Code", systemImage: "key") }
                 NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
             }
         }.navigationTitle("Settings")
@@ -441,7 +441,6 @@ struct SettingsView: View {
 }
 
 struct AIAccessCodeView: View {
-    var warning: String? = nil
     var onSaved: (() -> Void)? = nil
     var onCancel: (() -> Void)? = nil
     @State private var code = ""
@@ -454,10 +453,14 @@ struct AIAccessCodeView: View {
     var body: some View {
         Form {
             Section {
-                if let warning, message.isEmpty { errorNotice(warning) }
+                if message.isEmpty && !saved {
+                    Text("Enter your judging code to use Improve with AI.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
                 SecureField("Access code", text: $code)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .disabled(checking)
                 if saved { Button("Remove Code", role: .destructive) { cancelCheck(); AIAccessCodeStore.remove(); saved = false; messageIsError = false; message = "Code removed." } }
             } footer: {
                 Text("Enter the judging code from the submission notes. Can’t find it? [Email Andrea](mailto:andreajanewilliams2@gmail.com)")
@@ -494,7 +497,9 @@ struct AIAccessCodeView: View {
             .padding(.vertical, 12)
             .background(Brand.background)
         }
-        .onAppear { saved = AIAccessCodeStore.load() != nil }
+        .onAppear {
+            saved = AIAccessCodeStore.load() != nil
+        }
         .onDisappear { cancelCheck() }
     }
     private func errorNotice(_ text: String) -> some View {
@@ -515,7 +520,8 @@ struct AIAccessCodeView: View {
         let candidate = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (20...128).contains(candidate.count) else {
             messageIsError = true
-            message = "Enter the full access code supplied for the demo."
+            message = "Incorrect code. Please enter the code from the submission notes."
+            code = ""
             return
         }
         let currentCheckID = UUID()
@@ -538,7 +544,8 @@ struct AIAccessCodeView: View {
         } catch AIService.Failure.accessCodeRequired {
             guard checkID == currentCheckID, !Task.isCancelled else { return }
             messageIsError = true
-            message = "Code not recognised. Check it and try again."
+            message = "Incorrect code. Please enter the code from the submission notes."
+            code = ""
         } catch {
             guard checkID == currentCheckID, !Task.isCancelled else { return }
             messageIsError = true
@@ -556,28 +563,28 @@ struct JobDefaultsView: View {
         List {
             Section {
                 NavigationLink { DefaultTechnicianView() } label: {
-                    settingRow("Default Technician", value: defaults.state.defaultTechnician.isEmpty ? "Automatic" : defaults.state.defaultTechnician)
+                    settingRow("Technician", value: defaults.state.defaultTechnician.isEmpty ? "Automatic" : defaults.state.defaultTechnician)
                 }
                 NavigationLink { DefaultCategoryView() } label: {
                     let category = defaults.category()
-                    settingRow("Default Category", value: defaults.state.categoryMode == .lastUsed ? "Last Used" : defaults.state.categoryMode == .none ? "None" : category)
+                    settingRow("Category", value: defaults.state.categoryMode == .lastUsed ? "Last Used" : defaults.state.categoryMode == .none ? "None" : category)
                 }
-            } footer: { Text("Automatic technician uses Business Details first, then the most recently used name.") }
+            }
             Section {
                 TextField("Prefix (e.g. FR or JOB)", text: $referencePrefix)
                     .textInputAutocapitalization(.characters).autocorrectionDisabled()
                 Text("Example: \(JobReference.automatic(prefix: referencePrefix.isEmpty ? (profiles.first?.invoicePrefix ?? "FR") : referencePrefix, existing: []))")
                     .font(.caption).foregroundStyle(.secondary)
-            } header: { Text("Job references") } footer: { Text("Used for new jobs. A preset can supply its own prefix. Edit any reference in Job Details.") }
+            } header: { Text("Job references") }
             Section("Categories") {
-                NavigationLink { ManageCustomCategoriesView() } label: { Text("Manage Custom Categories") }
+                NavigationLink { ManageCustomCategoriesView() } label: { Text("Custom Categories") }
             }
             Section {
                 CurrencyPickerRow(currencyCode: Binding(
-                    get: { defaultCurrencyCode.isEmpty ? (profiles.first?.currencyCode ?? "USD") : defaultCurrencyCode },
+                    get: { defaultCurrencyCode.isEmpty ? "USD" : defaultCurrencyCode },
                     set: { defaultCurrencyCode = $0 }
-                ), title: "Default currency")
-            } footer: { Text("Used for new jobs without a preset and new presets. Each job or preset can still have its own currency.") }
+                ), title: "Currency")
+            } footer: { Text("For new jobs. Presets can override these settings.") }
         }.navigationTitle("Job Defaults")
     }
     private func settingRow(_ title: String, value: String) -> some View {
@@ -592,7 +599,7 @@ struct DefaultTechnicianView: View {
             Section {
                 TextField("None / Automatic", text: $defaults.state.defaultTechnician).textContentType(.name)
                 if !defaults.state.defaultTechnician.isEmpty { Button("Use Automatic") { defaults.state.defaultTechnician = "" } }
-            } header: { Text("Default Technician") } footer: { Text("This stays fixed until you change it here. Individual jobs remain editable.") }
+            } header: { Text("Default Technician") } footer: { Text(defaults.state.defaultTechnician.isEmpty ? "Uses the name in Business Details, or your last used name." : "Used for new jobs.") }
             if !defaults.state.recentTechnicians.isEmpty {
                 Section("Recent") {
                     ForEach(defaults.state.recentTechnicians, id: \.self) { name in
@@ -674,7 +681,7 @@ struct AboutView: View {
         List {
             Text("FixRecord"); Text("Capture. Create. Share.")
             Text("Your jobs stay on this device. When you choose Improve with AI, the job text and up to one Before and one After photo are sent for the draft.").font(.subheadline)
-            Link("Source licence", destination: URL(string: "https://www.gnu.org/licenses/agpl-3.0.html")!)
+            Link("Source license", destination: URL(string: "https://www.gnu.org/licenses/agpl-3.0.html")!)
         }.navigationTitle("About")
     }
 }
@@ -682,6 +689,8 @@ struct AboutView: View {
 enum DocumentTemplate: String, CaseIterable, Codable {
     case modern = "Modern", minimal = "Minimal", classic = "Classic", studio = "Studio", blueprint = "Blueprint"
     case executive = "Executive", editorial = "Editorial", precision = "Precision", copper = "Copper", horizon = "Horizon"
+
+    var displayName: String { self == .copper ? "Folio" : rawValue }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -827,6 +836,34 @@ struct CurrencySelectionView: View {
 
 struct DocumentOptions: Codable, Equatable {
     var template: DocumentTemplate = .modern
+    // Optional so existing jobs and presets retain their saved settings.
+    var brandColourHex: String?
+    var templateColours: [String: String]?
+    func colour(for layout: DocumentTemplate) -> String? {
+        templateColours?[layout.rawValue] ?? brandColourHex
+    }
+    mutating func setColour(_ hex: String?, for layout: DocumentTemplate) {
+        var colors = templateColours ?? [:]
+        colors[layout.rawValue] = hex ?? DocumentColour.defaultHex
+        templateColours = colors
+    }
+    mutating func setColourForAll(_ hex: String?) {
+        brandColourHex = hex
+        templateColours = nil
+    }
+    var selectedColour: String? {
+        get { colour(for: template) }
+        set { setColour(newValue, for: template) }
+    }
+
+    var logoSizePercent: Double?
+    var logoSize: Double {
+        get {
+            guard let value = logoSizePercent, value.isFinite else { return 100 }
+            return min(200, max(50, value))
+        }
+        set { logoSizePercent = newValue.isFinite ? min(200, max(50, newValue)) : 100 }
+    }
     var showLogo = true
     var showBusinessDetails = true
     var showFixRecordBranding = true
@@ -855,7 +892,8 @@ struct DocumentOptions: Codable, Equatable {
     func save() { if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: "documentOptions") } }
     func effective(isPro: Bool) -> Self {
         var value = self
-        if !isPro { value.template = .modern; value.showLogo = false; value.showFixRecordBranding = true }
+        value.showFixRecordBranding = !isPro
+        if !isPro { value.template = .modern; value.brandColourHex = nil; value.templateColours = nil; value.showLogo = false }
         return value
     }
 }
@@ -918,39 +956,45 @@ struct PresetsView: View {
     @State private var store = PresetStore.shared
     @StateObject private var entitlements = EntitlementService.shared
     @State private var editing: SavedPreset?
+    @State private var presetToDelete: SavedPreset?
 
     var body: some View {
         List {
-            Section("New jobs") {
+            Section {
                 Picker("Default preset", selection: $store.defaultID) {
                     Text("None").tag(nil as UUID?)
                     ForEach(store.presets) { preset in Text(preset.name).tag(Optional(preset.id)) }
                 }
-            }
+            } header: { Text("New jobs") }
+              footer: { Text("Reuse business details and document settings.") }
             Section {
                 ForEach(store.presets) { preset in
-                    Button { editing = preset } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(preset.name).foregroundStyle(Brand.navy)
-                                Text(preset.business.businessName.isEmpty ? layoutDescription(for: preset) : "\(preset.business.businessName) · \(layoutDescription(for: preset))")
-                                    .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Button { editing = preset } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(preset.name).foregroundStyle(Brand.navy)
+                                    Text(preset.business.businessName.isEmpty ? layoutDescription(for: preset) : "\(preset.business.businessName) · \(layoutDescription(for: preset))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if store.defaultID == preset.id { Text("DEFAULT").font(.caption2.bold()).foregroundStyle(Brand.blue) }
                             }
-                            Spacer()
-                            if store.defaultID == preset.id { Text("DEFAULT").font(.caption2.bold()).foregroundStyle(Brand.blue) }
-                        }
-                    }
-                    .swipeActions {
-                        Button("Delete", role: .destructive) { store.delete(preset.id) }
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        Button(role: .destructive) { presetToDelete = preset } label: {
+                            Image(systemName: "trash").frame(width: 44, height: 44)
+                        }.buttonStyle(.borderless).accessibilityLabel("Delete \(preset.name)")
                     }
                 }
             } header: { Text("Presets") }
-              footer: { Text("Swipe to delete. Jobs already using a preset keep their saved settings.") }
+              footer: { Text("Existing jobs stay unchanged.") }
             Section {
                 Button {
                     var preset = SavedPreset.custom(profile: profile)
                     preset.name = ""
-                    if !defaultCurrencyCode.isEmpty { preset.business.currencyCode = defaultCurrencyCode }
+                    preset.business.currencyCode = defaultCurrencyCode.isEmpty ? "USD" : defaultCurrencyCode
                     editing = preset
                 } label: {
                     Label("Create Preset", systemImage: "plus.circle.fill")
@@ -958,12 +1002,18 @@ struct PresetsView: View {
             }
         }.navigationTitle("Saved Presets")
             .sheet(item: $editing) { preset in NavigationStack { PresetEditorView(preset: preset) { store.save($0) } } }
+            .alert("Delete preset?", isPresented: Binding(get: { presetToDelete != nil }, set: { if !$0 { presetToDelete = nil } }), presenting: presetToDelete) { preset in
+                Button("Delete", role: .destructive) { store.delete(preset.id); presetToDelete = nil }
+                Button("Cancel", role: .cancel) { presetToDelete = nil }
+            } message: { preset in
+                Text("Delete \"\(preset.name)\"? Existing jobs keep their saved settings.")
+            }
             .task { await entitlements.refresh() }
     }
 
     private func layoutDescription(for preset: SavedPreset) -> String {
         if !entitlements.isPro && preset.options.template != .modern { return "Modern on Free" }
-        return preset.options.template.rawValue
+        return preset.options.template.displayName
     }
 }
 
@@ -990,7 +1040,7 @@ struct PresetEditorView: View {
     var body: some View {
         Form {
             if editName { Section("Preset name") { TextField("e.g. Standard repair", text: $preset.name) } }
-            Section("Business details") {
+            Section {
                 TextField("Business name", text: $preset.business.businessName)
                 TextField("Owner / contractor", text: $preset.business.ownerName)
                 TextField("Email", text: $preset.business.email).keyboardType(.emailAddress)
@@ -999,12 +1049,28 @@ struct PresetEditorView: View {
                 TextField("Tax / VAT number", text: $preset.business.taxNumber)
                 TextField("Payment instructions", text: $preset.business.paymentInstructions, axis: .vertical)
                 CurrencyPickerRow(currencyCode: $preset.business.currencyCode)
-                TextField("Tax / VAT %", text: $preset.business.taxRate).keyboardType(.decimalPad)
-                TextField("Job reference prefix", text: $preset.business.invoicePrefix)
-            }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tax / VAT (%)").font(.caption).foregroundStyle(.secondary)
+                    TextField("0", text: $preset.business.taxRate).keyboardType(.decimalPad)
+                        .accessibilityLabel("Tax / VAT percentage")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Reference prefix").font(.caption).foregroundStyle(.secondary)
+                    TextField("e.g. FR", text: $preset.business.invoicePrefix)
+                        .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                        .accessibilityLabel("Job reference prefix")
+                }
+            } header: { Text("Business details") }
+              footer: {
+                  if !editName { Text("Changes here apply to this job only.") }
+              }
             Section("Business logo · Pro") {
                 if let image = PhotoStore.image(preset.business.logoFilename) {
-                    Image(uiImage: image).resizable().scaledToFit().frame(height: 64)
+                    if entitlements.isPro {
+                        LogoSizeControl(image: image, percentage: $preset.options.logoSize)
+                    } else {
+                        Image(uiImage: image).resizable().scaledToFit().frame(height: 64)
+                    }
                 }
                 if entitlements.isPro {
                     PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images).disabled(loadingLogo)
@@ -1047,7 +1113,7 @@ struct PresetEditorView: View {
                         else { showingUpgrade = true }
                     } label: {
                         HStack {
-                            Text(layout.rawValue).foregroundStyle(.primary)
+                            Text(layout.displayName).foregroundStyle(.primary)
                             Spacer()
                             if !entitlements.isPro && layout != .modern {
                                 Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
@@ -1058,19 +1124,24 @@ struct PresetEditorView: View {
                         }
                     }
                 }
+                DocumentColourRow(hex: $preset.options.selectedColour, isPro: entitlements.isPro) { showingUpgrade = true }
                 if entitlements.isPro { Toggle("Show business logo", isOn: $preset.options.showLogo) }
                 else { lockedOption("Show business logo", detail: "Off on Free") }
-                Toggle("Show business details", isOn: $preset.options.showBusinessDetails)
-                if entitlements.isPro { Toggle("Show FixRecord footer", isOn: $preset.options.showFixRecordBranding) }
-                else { lockedOption("Remove FixRecord footer", detail: "Included on Free exports") }
+                Toggle(isOn: $preset.options.showBusinessDetails) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Show business details")
+                        Text("Phone, email and address on PDFs, plus tax number on invoices.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             } header: { Text("Document layout") }
-              footer: { Text("Modern and the unmarked settings are free. Pro unlocks other layouts, logos and branding removal.") }
+              footer: { Text("Modern and the unmarked settings are free. Pro adds nine layouts, brand colors, logos and footer removal.") }
             Section("Work report") {
                 Toggle("Show before & after photos", isOn: $preset.includePhotos)
                 Toggle("Show Before / After labels", isOn: $preset.options.showPhotoLabels)
                 Toggle("Show reported issue", isOn: $preset.options.showReportedIssue)
                 Toggle("Show materials used", isOn: $preset.options.showMaterials)
-                Toggle("Show client acknowledgement", isOn: $preset.options.showClientAcknowledgement)
+                Toggle("Show client acknowledgment", isOn: $preset.options.showClientAcknowledgement)
                 Toggle("Show additional notes", isOn: $preset.options.showAdditionalNotes)
                 Toggle("Show prices", isOn: $preset.options.showPricesInReport)
             }
@@ -1081,7 +1152,7 @@ struct PresetEditorView: View {
                 Toggle("Show terms & notes", isOn: $preset.options.showTerms)
                 Toggle("Show discount", isOn: $preset.options.showDiscount)
             }
-        }.navigationTitle(editName ? (preset.name.isEmpty ? "New Preset" : "Edit Preset") : "Customise Job")
+        }.navigationTitle(editName ? (preset.name.isEmpty ? "New Preset" : "Edit Preset") : "Customize Job")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") { onSave(preset); dismiss() }
@@ -1104,7 +1175,8 @@ struct PresetEditorView: View {
                             logoError = "The selected image could not be loaded. Try another photo."
                             return
                         }
-                        preset.business.logoFilename = try PhotoStore.save(image)
+                        preset.business.logoFilename = try PhotoStore.save(image, preserveTransparency: true)
+                        preset.options.showLogo = true
                     } catch {
                         logoError = "The selected image could not be saved. Try another photo."
                     }
@@ -1133,101 +1205,316 @@ struct PresetEditorView: View {
     }
 }
 
+/// Stored as sRGB HEX, independent of layout. Export text uses a darker, readable ink.
+enum DocumentColour {
+    static let defaultHex = "155EEF"
+    static let swatches = ["155EEF", "172B4D", "326352", "754C91", "9A4D30", "52616B", "242424"]
+
+    static func normalise(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let hex = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "").uppercased()
+        return hex.range(of: "^[0-9A-F]{6}$", options: .regularExpression) == nil ? nil : hex
+    }
+
+    static func colour(_ hex: String?) -> UIColor {
+        let value = UInt32(normalise(hex) ?? defaultHex, radix: 16) ?? 0x155EEF
+        return UIColor(red: CGFloat((value >> 16) & 255) / 255,
+                       green: CGFloat((value >> 8) & 255) / 255,
+                       blue: CGFloat(value & 255) / 255, alpha: 1)
+    }
+
+    static func hex(_ colour: Color) -> String {
+        let rgb = UIColor(colour).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        rgb.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(format: "%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+    }
+}
+
+struct LogoSizeControl: View {
+    let image: UIImage
+    @Binding var percentage: Double
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(uiImage: image).resizable().scaledToFit()
+                .frame(width: 48 * percentage / 100, height: 48 * percentage / 100)
+                .frame(maxWidth: .infinity, minHeight: 112, maxHeight: 112)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityLabel("Logo size preview")
+            HStack {
+                Text("Logo size").font(.subheadline)
+                Spacer()
+                Text("\(Int(percentage))%").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+                Button("Reset") { percentage = 100 }.font(.caption)
+                    .disabled(percentage == 100)
+            }
+            Slider(value: $percentage, in: 50...200, step: 5)
+                .accessibilityLabel("Logo size")
+                .accessibilityValue("\(Int(percentage)) percent")
+        }.padding(.vertical, 4)
+    }
+}
+
+struct DocumentColourRow: View {
+    @Binding var hex: String?
+    let isPro: Bool
+    var applyToAll: ((String?) -> Void)? = nil
+    var upgrade: () -> Void
+    @State private var showingPicker = false
+
+    var body: some View {
+        Button { if isPro { showingPicker = true } else { upgrade() } } label: {
+            HStack(spacing: 12) {
+                Circle().fill(Color(uiColor: DocumentColour.colour(isPro ? hex : nil)))
+                    .frame(width: 28, height: 28)
+                    .overlay(Circle().strokeBorder(.primary.opacity(0.12)))
+                Text("Color").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Spacer()
+                if !isPro { Text("PRO").font(.caption2.bold()).foregroundStyle(Brand.blue) }
+                Image(systemName: isPro ? "chevron.right" : "lock.fill").font(.caption).foregroundStyle(.secondary)
+            }.frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+            .sheet(isPresented: $showingPicker) {
+                NavigationStack { DocumentColourPicker(hex: $hex, applyToAll: applyToAll) }
+                    .presentationDetents([.medium, .large])
+            }
+    }
+}
+
+struct DocumentColourPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var hex: String?
+    var applyToAll: ((String?) -> Void)? = nil
+    @State private var allTemplates = false
+    @State private var draft = ""
+    private var selection: Binding<Color> {
+        Binding(get: { Color(uiColor: DocumentColour.colour(draft)) }, set: { draft = DocumentColour.hex($0) })
+    }
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 0) {
+                    ForEach(DocumentColour.swatches, id: \.self) { value in
+                        Button { draft = value } label: {
+                            Circle().fill(Color(uiColor: DocumentColour.colour(value)))
+                                .frame(width: 30, height: 30)
+                                .overlay(Circle().strokeBorder(.white, lineWidth: 2).padding(3).opacity(draft == value ? 1 : 0))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }.buttonStyle(.plain).accessibilityLabel("Color #\(value)")
+                            .accessibilityAddTraits(draft == value ? .isSelected : [])
+                    }
+                }
+                ColorPicker("Custom color", selection: selection, supportsOpacity: false)
+                HStack {
+                    Text("HEX").foregroundStyle(.secondary)
+                    TextField("155EEF", text: $draft).monospaced().multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                        .accessibilityLabel("Hex color code")
+                }
+                if DocumentColour.normalise(draft) == nil {
+                    Text("Enter a six-digit color, such as 155EEF.").font(.caption).foregroundStyle(.secondary)
+                }
+            } footer: { Text("Applies to the current template’s report and invoice.") }
+            if applyToAll != nil { Toggle("Apply to all templates", isOn: $allTemplates) }
+            Button("Reset to blue") { draft = DocumentColour.defaultHex }
+        }.navigationTitle("Color").navigationBarTitleDisplayMode(.inline)
+            .onAppear { draft = DocumentColour.normalise(hex) ?? DocumentColour.defaultHex }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        let color = DocumentColour.normalise(draft)
+                        hex = color
+                        if allTemplates { applyToAll?(color) }
+                        dismiss()
+                    }
+                        .disabled(DocumentColour.normalise(draft) == nil)
+                }
+            }
+    }
+}
+
+// Cached gallery samples are separate from exported customer documents.
+// Increment the key version when sample content or PDF layouts change.
+enum TemplatePreviewCache {
+    struct Entry: Codable {
+        let key: String
+        let document: Data
+        let images: [Data]
+    }
+    private static let queue = DispatchQueue(label: "fixrecord.template-previews", qos: .userInitiated)
+
+    static func load(template: DocumentTemplate, key: String, options: DocumentOptions,
+                     business: BusinessSnapshot?, isPro: Bool, includePhotos: Bool) async throws -> Entry {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let result = try autoreleasepool {
+                        try loadOrRender(template: template, key: key, options: options,
+                                         business: business, isPro: isPro, includePhotos: includePhotos)
+                    }
+                    continuation.resume(returning: result)
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    private static func loadOrRender(template: DocumentTemplate, key: String, options: DocumentOptions,
+                                     business: BusinessSnapshot?, isPro: Bool, includePhotos: Bool) throws -> Entry {
+        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TemplatePreviews", isDirectory: true)
+        // One replaceable entry per layout keeps disk usage bounded.
+        let file = folder.appendingPathComponent(template.rawValue + ".json")
+        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode(Entry.self, from: data),
+           saved.key == key, saved.images.count == 2,
+           saved.images.allSatisfy({ UIImage(data: $0) != nil }), PDFDocument(data: saved.document) != nil {
+            return saved
+        }
+        // Create detached sample models on this queue; never pass live SwiftData models across threads.
+        let job = SampleJob.make()
+        let profile = business?.asProfile()
+        let report = try PDFMaker.make(kind: .report, job: job, profile: profile, options: options,
+                                      isPro: isPro, includePhotos: includePhotos, previewLayout: template)
+        let invoice = try PDFMaker.make(kind: .invoice, job: job, profile: profile, options: options,
+                                       isPro: isPro, previewLayout: template)
+        guard let pdf = PDFDocument(data: report), let invoicePDF = PDFDocument(data: invoice),
+              let reportPage = pdf.page(at: 0), let invoicePage = invoicePDF.page(at: 0),
+              let first = reportPage.thumbnail(of: CGSize(width: 420, height: 594), for: .mediaBox).pngData(),
+              let second = invoicePage.thumbnail(of: CGSize(width: 420, height: 594), for: .mediaBox).pngData() else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        for index in 0..<invoicePDF.pageCount {
+            if let page = invoicePDF.page(at: index) { pdf.insert(page, at: pdf.pageCount) }
+        }
+        guard let document = pdf.dataRepresentation() else { throw CocoaError(.fileReadCorruptFile) }
+        let result = Entry(key: key, document: document, images: [first, second])
+        // Cache failures must not prevent viewing a generated preview.
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(result) { try? data.write(to: file, options: .atomic) }
+        return result
+    }
+}
+
 struct TemplatesView: View {
+    @Query private var profiles: [BusinessProfile]
+    @AppStorage("showPhotosInWorkReport") private var includePreviewPhotos = true
     @State private var options = DocumentOptions.load()
     @StateObject private var entitlements = EntitlementService.shared
     @State private var showingUpgrade = false
+    @State private var showingPreviewUpgrade = false
     @State private var preview: DocumentTemplate?
     @State private var documents: [DocumentTemplate: Data] = [:]
     @State private var thumbnails: [DocumentTemplate: [UIImage]] = [:]
+    @State private var previewError = ""
+    @State private var renderedPreviewKeys: [DocumentTemplate: String] = [:]
     private var selected: DocumentTemplate { options.effective(isPro: entitlements.isPro).template }
+    private func previewKey(for template: DocumentTemplate) -> String {
+        var settings = options.effective(isPro: entitlements.isPro)
+        settings.brandColourHex = settings.colour(for: template)
+        settings.templateColours = nil
+        settings.template = template
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let settingsKey = (try? encoder.encode(settings).base64EncodedString()) ?? ""
+        let businessKey = (try? encoder.encode(BusinessSnapshot(profile: profiles.first)).base64EncodedString()) ?? ""
+        return "gallery-v2-\(Locale.current.identifier)-\(TimeZone.current.identifier)-\(entitlements.isPro)-\(includePreviewPhotos)-\(settingsKey)-\(businessKey)"
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                if !previewError.isEmpty { Text(previewError).font(.caption).foregroundStyle(.secondary) }
                 ForEach(DocumentTemplate.allCases, id: \.self) { template in
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         Button { preview = template } label: {
                             HStack(alignment: .top, spacing: 12) {
-                                ForEach(Array((thumbnails[template] ?? []).enumerated()), id: \.offset) { index, image in
+                                ForEach(Array((renderedPreviewKeys[template] == previewKey(for: template) ? thumbnails[template] ?? [] : []).enumerated()), id: \.offset) { index, image in
                                     VStack(spacing: 8) {
                                         Image(uiImage: image).resizable().scaledToFit()
-                                            .background(.white).clipShape(RoundedRectangle(cornerRadius: 4))
-                                            .shadow(color: .black.opacity(0.12), radius: 6, y: 4)
-                                        Text(index == 0 ? "Work report" : "Invoice").font(.caption).foregroundStyle(.secondary)
+                                            .background(.white).clipShape(RoundedRectangle(cornerRadius: 3))
+                                            .shadow(color: .black.opacity(0.10), radius: 5, y: 3)
+                                        Text(index == 0 ? "Report" : "Invoice").font(.caption).foregroundStyle(.secondary)
                                     }.frame(maxWidth: .infinity)
                                 }
-                            }.padding(18).frame(maxWidth: .infinity, minHeight: 180)
-                                .background(Brand.pale, in: RoundedRectangle(cornerRadius: 12))
-                        }.buttonStyle(.plain).accessibilityLabel("Preview \(template.rawValue) report and invoice")
-                        HStack {
-                            Text(template.rawValue).font(.title3.bold())
-                            if template != .modern {
-                                Button {
-                                    if !entitlements.isPro { showingUpgrade = true }
-                                } label: {
-                                    Label("PRO", systemImage: entitlements.isPro ? "star.fill" : "lock.fill")
-                                        .font(.caption2.bold()).padding(.horizontal, 8).padding(.vertical, 5)
-                                        .foregroundStyle(Brand.blue).background(Brand.pale, in: Capsule())
-                                        .frame(minHeight: 44)
-                                }.buttonStyle(.plain)
-                                    .disabled(entitlements.isPro)
-                                    .accessibilityLabel(entitlements.isPro ? "Pro template" : "View Pro plans")
-                            }
+                                if renderedPreviewKeys[template] != previewKey(for: template) {
+                                    if previewError.isEmpty { ProgressView().frame(maxWidth: .infinity, minHeight: 180) }
+                                    else { Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 180) }
+                                }
+                            }.padding(16).frame(maxWidth: .infinity)
+                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                        }.buttonStyle(.plain).disabled(renderedPreviewKeys[template] != previewKey(for: template))
+                            .accessibilityLabel("Preview \(template.displayName) report and invoice")
+                        HStack(spacing: 8) {
+                            Text(template.displayName).font(.headline)
+                            if !entitlements.isPro && template != .modern { Text("PRO").font(.caption2.bold()).foregroundStyle(Brand.blue).padding(.horizontal, 7).padding(.vertical, 4).background(Brand.pale, in: Capsule()) }
                             Spacer()
-                            if selected == template { Label("Selected", systemImage: "checkmark.circle.fill").font(.caption.weight(.semibold)).foregroundStyle(Brand.blue) }
-                        }.foregroundStyle(Brand.navy)
-                        HStack(spacing: 12) {
-                            Button { preview = template } label: {
-                                Label("Preview", systemImage: "arrow.up.left.and.arrow.down.right")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(minHeight: 44)
-                                    .contentShape(Rectangle())
-                            }.buttonStyle(.plain).foregroundStyle(Brand.blue)
-                            Spacer()
-                            if selected != template && (entitlements.isPro || template == .modern) {
-                                Button {
-                                    options.template = template
-                                    options.save()
-                                } label: {
-                                    Text("Use template")
-                                        .font(.subheadline.weight(.semibold))
-                                        .padding(.horizontal, 18).frame(minHeight: 44)
-                                        .foregroundStyle(.white)
-                                        .background(Brand.blue, in: RoundedRectangle(cornerRadius: 12))
-                                }.buttonStyle(.plain)
-                            }
+                            Button {
+                                if entitlements.isPro || template == .modern { options.template = template }
+                                else { showingUpgrade = true }
+                            } label: {
+                                Image(systemName: selected == template ? "checkmark.circle.fill" : "circle")
+                                    .font(.title2).foregroundStyle(selected == template ? Brand.blue : Color.secondary)
+                                    .frame(width: 44, height: 44)
+                            }.buttonStyle(.plain).accessibilityLabel(selected == template ? "\(template.displayName), selected" : "Use \(template.displayName)")
                         }
-                    }.padding(16).background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
+                    }.padding(14).background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
                         .overlay(RoundedRectangle(cornerRadius: 20).stroke(selected == template ? Brand.blue.opacity(0.5) : Color.primary.opacity(0.07), lineWidth: 1))
+                        .task(id: previewKey(for: template)) { await renderPreview(template) }
                 }
-                Text("Your default style is used for new jobs. Existing jobs keep their document settings.")
+                Text("Used for new jobs. Customize an existing job from its document preview.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(18)
-        }.background(Brand.pale.opacity(0.4)).navigationTitle("Templates")
+        }.background(Color(uiColor: .systemGroupedBackground)).navigationTitle("Templates")
+            .onAppear { options = .load() }
+            .onChange(of: options) { _, value in value.save() }
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
             .sheet(isPresented: Binding(get: { preview != nil }, set: { if !$0 { preview = nil } })) {
                 NavigationStack {
-                    if let preview, let data = documents[preview] {
-                        PDFPreview(data: data).navigationTitle("\(preview.rawValue) preview").navigationBarTitleDisplayMode(.inline)
-                            .toolbar { Button("Done") { self.preview = nil } }
+                    if let preview, renderedPreviewKeys[preview] == previewKey(for: preview), let data = documents[preview] {
+                        PDFPreview(data: data).navigationTitle(preview.displayName).navigationBarTitleDisplayMode(.inline)
+                            .safeAreaInset(edge: .bottom, spacing: 0) {
+                                DocumentColourRow(hex: Binding(
+                                    get: { options.colour(for: preview) },
+                                    set: { options.setColour($0, for: preview) }
+                                ), isPro: entitlements.isPro, applyToAll: { options.setColourForAll($0) }) {
+                                    showingPreviewUpgrade = true
+                                }
+                                .padding(.horizontal, 20).padding(.vertical, 10)
+                                .background(.regularMaterial)
+                                .overlay(alignment: .top) { Divider() }
+                            }
+                            .toolbar {
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    Button("Done") { self.preview = nil }
+                                }
+                            }
+                    } else {
+                        ProgressView("Loading preview…")
                     }
                 }
+                .task(id: preview.map { previewKey(for: $0) }) { if let preview { await renderPreview(preview) } }
+                .sheet(isPresented: $showingPreviewUpgrade) { NavigationStack { UpgradeView() } }
             }
-            .task {
-                if documents.isEmpty {
-                    let sample = SampleJob.make()
-                    for template in DocumentTemplate.allCases {
-                        var example = DocumentOptions(); example.template = template
-                        guard let data = try? PDFMaker.make(kind: .pack, job: sample, profile: nil, options: example, isPro: true),
-                              let pdf = PDFDocument(data: data) else { continue }
-                        documents[template] = data
-                        thumbnails[template] = (0..<min(2, pdf.pageCount)).compactMap { pdf.page(at: $0)?.thumbnail(of: CGSize(width: 420, height: 594), for: .mediaBox) }
-                    }
-                }
-                await entitlements.refresh()
-            }
+            .task { await entitlements.refresh() }
     }
 
+    @MainActor private func renderPreview(_ template: DocumentTemplate) async {
+        let key = previewKey(for: template)
+        guard renderedPreviewKeys[template] != key, !Task.isCancelled else { return }
+        let business = profiles.first.map { BusinessSnapshot(profile: $0) }
+        do {
+            let result = try await TemplatePreviewCache.load(template: template, key: key,
+                options: options.effective(isPro: entitlements.isPro), business: business,
+                isPro: entitlements.isPro, includePhotos: includePreviewPhotos)
+            guard !Task.isCancelled, key == previewKey(for: template) else { return }
+            documents[template] = result.document
+            thumbnails[template] = result.images.compactMap { UIImage(data: $0) }
+            renderedPreviewKeys[template] = key
+            previewError = ""
+        } catch {
+            guard !Task.isCancelled, key == previewKey(for: template) else { return }
+            previewError = "Could not load this preview. Reopen Templates to try again."
+        }
+    }
 }
 
 struct DocumentSettingsView: View {
@@ -1238,16 +1525,22 @@ struct DocumentSettingsView: View {
     var body: some View {
         Form {
             Section("Branding") {
+                DocumentColourRow(hex: $options.selectedColour, isPro: entitlements.isPro) { showingUpgrade = true }
                 proToggle("Show business logo", value: $options.showLogo)
-                Toggle("Show business details", isOn: $options.showBusinessDetails)
-                proToggle("Show FixRecord footer", value: $options.showFixRecordBranding, reversedGate: true)
+                Toggle(isOn: $options.showBusinessDetails) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Show business details")
+                        Text("Phone, email and address on PDFs, plus tax number on invoices.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
             Section("Work Report") {
                 Toggle("Show before & after photos", isOn: $showPhotosInWorkReport)
                 Toggle("Show Before / After labels", isOn: $options.showPhotoLabels)
                 Toggle("Show reported issue", isOn: $options.showReportedIssue)
                 Toggle("Show materials used", isOn: $options.showMaterials)
-                Toggle("Show client acknowledgement", isOn: $options.showClientAcknowledgement)
+                Toggle("Show client acknowledgment", isOn: $options.showClientAcknowledgement)
                 Toggle("Show additional notes", isOn: $options.showAdditionalNotes)
                 Toggle("Show prices", isOn: $options.showPricesInReport)
             }
@@ -1263,12 +1556,12 @@ struct DocumentSettingsView: View {
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
             .task { await entitlements.refresh() }
     }
-    private func proToggle(_ title: String, value: Binding<Bool>, reversedGate: Bool = false) -> some View {
+    private func proToggle(_ title: String, value: Binding<Bool>) -> some View {
         HStack {
             Text(title)
             Spacer()
             if !entitlements.isPro { Text("PRO").font(.caption2.bold()).foregroundStyle(Brand.blue) }
-            Toggle(title, isOn: Binding(get: { !entitlements.isPro && reversedGate ? true : !entitlements.isPro ? false : value.wrappedValue }, set: { newValue in if entitlements.isPro { value.wrappedValue = newValue } else { showingUpgrade = true } })).labelsHidden()
+            Toggle(title, isOn: Binding(get: { entitlements.isPro && value.wrappedValue }, set: { newValue in if entitlements.isPro { value.wrappedValue = newValue } else { showingUpgrade = true } })).labelsHidden()
         }
     }
 }

@@ -16,7 +16,12 @@ enum AIAccessCodeStore {
         search[kSecMatchLimit as String] = kSecMatchLimitOne
         guard SecItemCopyMatching(search as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              (20...128).contains(value.count) else {
+            remove()
+            return nil
+        }
+        return value
     }
     static func save(_ code: String) -> Bool {
         let value = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -156,7 +161,6 @@ struct NotesView: View {
     @State private var busy = false
     @State private var hasPhotoEvidence = false
     @State private var showingAccessCode = false
-    @State private var codeRejected = false
     var body: some View {
         let hasEvidence = !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasPhotoEvidence
         return Form {
@@ -191,9 +195,8 @@ struct NotesView: View {
             .onChange(of: job.professionalNote) { _, _ in job.technicianConfirmed = false }
             .sheet(isPresented: $showingAccessCode) {
                 NavigationStack {
-                    AIAccessCodeView(warning: codeRejected ? "That code was not accepted. Check it and try again." : nil, onSaved: {
+                    AIAccessCodeView(onSaved: {
                         showingAccessCode = false
-                        codeRejected = false
                         message = ""
                         Task { await improve() }
                     }, onCancel: { showingAccessCode = false })
@@ -202,7 +205,7 @@ struct NotesView: View {
             }
     }
     private func requestImprovement() {
-        if AIAccessCodeStore.load() == nil { codeRejected = false; showingAccessCode = true }
+        if AIAccessCodeStore.load() == nil { showingAccessCode = true }
         else { Task { await improve() } }
     }
     private func improve() async {
@@ -210,8 +213,8 @@ struct NotesView: View {
         do { draft = try await AIService.improve(job: job).professionalSummary; message = "Review and edit this AI-assisted draft. It has not verified the work." }
         catch {
             if let failure = error as? AIService.Failure, case .accessCodeRequired = failure {
-                message = "That code was not accepted. Check it and try again."
-                codeRejected = true
+                AIAccessCodeStore.remove()
+                message = ""
                 showingAccessCode = true
             } else {
                 message = (error as? AIService.Failure)?.localizedDescription ?? AIService.Failure.unavailable.localizedDescription
@@ -228,10 +231,10 @@ struct PricingView: View {
     var body: some View {
         Form {
             itemSection("Materials", kind: .material)
-            itemSection("Labour", kind: .labour)
+            itemSection("Labor", kind: .labour)
             itemSection("Additional charges", kind: .charge)
             Section("Adjustments") { CurrencyPickerRow(currencyCode: Binding(get: { job.currencyCode }, set: { job.setCurrency($0) })); HStack { Text("Tax / VAT %"); Spacer(); TextField("0", text: $job.taxRate).multilineTextAlignment(.trailing).keyboardType(.decimalPad).frame(width: 90) }; HStack { Text("Fixed discount"); Spacer(); TextField("0", text: $job.discount).multilineTextAlignment(.trailing).keyboardType(.decimalPad).frame(width: 90) }; DatePicker("Due date", selection: $job.dueDate, displayedComponents: .date); Toggle("Mark invoice paid", isOn: $job.paid); TextField("Invoice notes", text: $job.invoiceNotes, axis: .vertical) }
-            Section("Live summary") { totalRow("Materials", totals.materials); totalRow("Labour", totals.labour); totalRow("Additional charges", totals.charges); totalRow("Subtotal", totals.subtotal); if documentOptions.showDiscount { totalRow("Discount", -totals.discount) }; if documentOptions.showTax { totalRow("Tax / VAT", totals.tax) }; HStack { Text("Grand total").font(.headline); Spacer(); Text(Money.format(totals.grandTotal, currency: job.currencyCode)).font(.headline).foregroundStyle(Brand.blue) } }
+            Section("Live summary") { totalRow("Materials", totals.materials); totalRow("Labor", totals.labour); totalRow("Additional charges", totals.charges); totalRow("Subtotal", totals.subtotal); if documentOptions.showDiscount { totalRow("Discount", -totals.discount) }; if documentOptions.showTax { totalRow("Tax / VAT", totals.tax) }; HStack { Text("Grand total").font(.headline); Spacer(); Text(Money.format(totals.grandTotal, currency: job.currencyCode)).font(.headline).foregroundStyle(Brand.blue) } }
             if !valid { Section { Label("Add a description and review quantities or prices before exporting the invoice.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) } }
             Section { NavigationLink("Preview invoice") { ExportView(job: job) }.disabled(!valid) }
         }.navigationTitle("Materials & Pricing")
@@ -255,7 +258,7 @@ struct PricingView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.red)
-                        .accessibilityLabel("Remove \(item.name.isEmpty ? kind.rawValue : item.name)")
+                        .accessibilityLabel("Remove \(item.name.isEmpty ? kind.displayName : item.name)")
                     }
                     HStack {
                         TextField(kind == .labour ? "Hours" : "Qty", text: itemBinding(item.id, \.quantity))
@@ -269,7 +272,7 @@ struct PricingView: View {
                 }
                 .padding(.vertical, 2)
             }
-            Button { var items = job.items; items.append(PriceItem(kind: kind, name: "", unitPrice: "0")); job.items = items } label: { Label("Add \(kind.rawValue.capitalized)", systemImage: "plus") }
+            Button { var items = job.items; items.append(PriceItem(kind: kind, name: "", unitPrice: "0")); job.items = items } label: { Label("Add \(kind.displayName)", systemImage: "plus") }
             if kind == .material {
                 NavigationLink { ReceiptView(job: job) } label: { Label("Scan receipt", systemImage: "doc.viewfinder") }
             }
@@ -384,7 +387,7 @@ struct UpgradeView: View {
                 VStack(spacing: 0) {
                     benefit("Client Packs", detail: "Report and invoice, together", icon: "doc.on.doc")
                     Divider().padding(.leading, 58)
-                    benefit("Premium templates", detail: "A style for every business", icon: "doc.richtext")
+                    benefit("Layouts & colors", detail: "Nine Pro layouts, your brand color", icon: "doc.richtext")
                     Divider().padding(.leading, 58)
                     benefit("Your own branding", detail: "Add your logo. Remove the footer.", icon: "paintbrush.pointed")
                 }
@@ -450,7 +453,7 @@ struct UpgradeView: View {
         let period = package.packageType == .annual ? "year" : "month"
         let price = "\(package.storeProduct.localizedPriceString) per \(period)"
         let terms = service.trialDurations[package.identifier].map { "\($0) free, then \(price)." } ?? "\(price)."
-        return isTestStore ? "\(terms) Test purchase — no charge." : "\(terms) Auto-renews. Cancel anytime."
+        return isTestStore ? terms : "\(terms) Auto-renews. Cancel anytime."
     }
 
     private func planCard(_ package: Package) -> some View {

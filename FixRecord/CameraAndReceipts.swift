@@ -198,7 +198,7 @@ struct ReceiptView: View {
             Image(systemName: "doc.text.viewfinder").font(.system(size: 60)).foregroundStyle(Brand.navy).frame(width: 100, height: 100).background(Brand.pale, in: RoundedRectangle(cornerRadius: 25))
             Text("Scan a receipt").font(.title.bold()).foregroundStyle(Brand.navy)
             Text("Take a photo of your receipt and we'll extract the items and prices.").multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 28)
-            if !savedNotice.isEmpty { Text(savedNotice).font(.subheadline).foregroundStyle(Brand.teal) }
+            if !savedNotice.isEmpty { Text(savedNotice).font(.subheadline).foregroundStyle(Brand.blue) }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.red).padding(.horizontal) }
             VStack(alignment: .leading, spacing: 12) {
                 Label("Saves you time", systemImage: "clock")
@@ -292,7 +292,7 @@ struct ReceiptView: View {
             uncertainItems = scan.needsReview ? Set(parsed.items.map(\.id)) : parsed.uncertainItems
             merchant = parsed.merchant; number = parsed.number; rows = parsed.items; date = parsed.date ?? Date()
             message = rows.isEmpty
-                ? "We couldn't recognise any items from this receipt. You can enter them manually or retake the photo."
+                ? "We couldn't recognize any items from this receipt. You can enter them manually or retake the photo."
                 : [ImageQuality.warning(for: image), scan.needsReview ? "Some text was unclear. Check the highlighted items." : nil,
                    parsed.warning.isEmpty ? nil : parsed.warning].compactMap { $0 }.joined(separator: " ")
         } catch { message = "Text recognition failed. You can add and edit materials manually." }
@@ -563,7 +563,9 @@ enum ReceiptParser {
     }
     static func parse(_ inputLines: [String]) -> (merchant: String, number: String, date: Date?, total: String, items: [PriceItem], warning: String, uncertainItems: Set<UUID>) {
         let lines = inputLines.map { line in
-            line.trimmingCharacters(in: .whitespacesAndNewlines)
+            // OCR can merge a left-hand note with the totals column on the right.
+            line.replacingOccurrences(of: #"(?i)^.*?\b((?:sub\s*total|grand\s*total|(?:sales\s+)?tax|vat|total)\s*:\s*(?:\p{Sc}\s*)?\d[\d., ]*)$"#, with: "$1", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: #"(?i)(\d[.,]\d{2})\s*[TFANX]$"#, with: "$1", options: .regularExpression)
         }
         let merchant = lines.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
@@ -604,6 +606,51 @@ enum ReceiptParser {
             } else { itemLines.append(line) }
         }
         let quantityDetail = try! NSRegularExpression(pattern: "(?i)^(\\d+(?:[.,]\\d+)?)\\s*(?:lb|lbs|kg|ea)?\\s*@\\s*(?:\(currency)\\s*)?(\(amount))(?:\\s*/\\s*(?:lb|lbs|kg|ea))?$" )
+        let tableHeader = lines.first { line in
+            line.range(of: #"(?i)\b(?:description|item)\b.*\b(?:qty|quantity)\b.*\b(?:price|rate)\b"#, options: .regularExpression) != nil
+        }
+        let numberedTable = tableHeader?.range(of: #"(?i)^(?:no\.?|#|item\s+no\.?)\s"#, options: .regularExpression) != nil
+        let tableRow = try! NSRegularExpression(pattern: "(?i)^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s+(?:\(currency)\\s*)?(\(amount))\\s+(?:\(currency)\\s*)?(\(amount))$")
+        let missingQuantityRow = try! NSRegularExpression(pattern: "(?i)^(.+?)\\s+(?:\(currency)\\s*)?(\(amount))\\s+(?:\(currency)\\s*)?(\(amount))$")
+        var inferredLines: Set<String> = []
+        if tableHeader != nil {
+            itemLines = itemLines.map { line in
+                var name: String
+                var count: Decimal
+                var unit: Decimal
+                var total: Decimal
+                var inferred = false
+                if let description = capture(tableRow, in: line, at: 1),
+                   let q = capture(tableRow, in: line, at: 2).flatMap(decimal),
+                   let u = capture(tableRow, in: line, at: 3).flatMap(decimal),
+                   let t = capture(tableRow, in: line, at: 4).flatMap(decimal), q > 0 {
+                    name = description; count = q; unit = u; total = t
+                    if Money.rounded(count * unit) != Money.rounded(total) {
+                        // Preserve the printed cost rather than invent a conflicting line total.
+                        count = 1; unit = total; inferred = true
+                    }
+                } else if let description = capture(missingQuantityRow, in: line, at: 1),
+                          let u = capture(missingQuantityRow, in: line, at: 2).flatMap(decimal),
+                          let t = capture(missingQuantityRow, in: line, at: 3).flatMap(decimal), u > 0, t > 0 {
+                    let ratio = t / u
+                    var rounded = Decimal(); var value = ratio
+                    NSDecimalRound(&rounded, &value, 0, .plain)
+                    guard rounded > 0, rounded <= 10000, Money.rounded(rounded * u) == Money.rounded(t) else { return line }
+                    name = description; count = rounded; unit = u; total = t; inferred = true
+                } else { return line }
+                if numberedTable { name = name.replacingOccurrences(of: #"^\d+\s+"#, with: "", options: .regularExpression) }
+                func price(_ value: Decimal) -> String { NSDecimalNumber(decimal: Money.rounded(value)).description(withLocale: Locale(identifier: "en_US_POSIX")) }
+                // Keep two decimal places so the normal receipt parser recognises the amounts.
+                let formatter = NumberFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.numberStyle = .decimal; formatter.usesGroupingSeparator = false
+                formatter.minimumFractionDigits = 2; formatter.maximumFractionDigits = 2
+                let unitText = formatter.string(from: NSDecimalNumber(decimal: unit)) ?? price(unit)
+                let totalText = formatter.string(from: NSDecimalNumber(decimal: total)) ?? price(total)
+                let normalized = "\(NSDecimalNumber(decimal: count).stringValue)x \(name) @ \(unitText) \(totalText)"
+                if inferred { inferredLines.insert(normalized) }
+                return normalized
+            }
+        }
         var uncertainItems: Set<UUID> = []
         let items = itemLines.enumerated().compactMap { index, line -> PriceItem? in
             guard quantityDetail.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)) == nil,
@@ -616,7 +663,7 @@ enum ReceiptParser {
             // Negative lines are adjustments/returns, not positive material costs.
             guard name.range(of: #"[-−]\s*[$£€]?\s*$"#, options: .regularExpression) == nil else { return nil }
             name = name.replacingOccurrences(of: #"^\d{6,14}\s+"#, with: "", options: .regularExpression)
-            var needsReview = false
+            var needsReview = inferredLines.contains(line)
             var quantity: Decimal = 1
             if let count = capture(quantityPrefix, in: name, at: 1),
                let parsed = decimal(count), parsed > 0,
