@@ -7,6 +7,7 @@ type AccessIdentity = { id: string; isPro: boolean };
 const required = ['reportedIssue', 'workCompleted', 'completionNotes', 'professionalSummary'] as const;
 const defaultModel = 'gpt-6-luna';
 const maxImageBytes = 900_000;
+const judgingRequestLimit = 1000;
 const memory = new Map<string, { minute: number; day: number; month: number; minuteCount: number; dayCount: number; monthlyCount: number }>();
 let judgingRequests = 0;
 const ipMemory = new Map<string, { minute: number; day: number; minuteCount: number; dayCount: number }>();
@@ -107,12 +108,12 @@ async function allowed(key: string, installId: string, access: AccessIdentity): 
     const script = `
       local monthly = tonumber(redis.call('GET', KEYS[1]) or '0')
       local total = tonumber(redis.call('GET', KEYS[2]) or '0')
-      if monthly >= tonumber(ARGV[1]) or total >= 600 then return 0 end
+      if monthly >= tonumber(ARGV[1]) or total >= tonumber(ARGV[2]) then return 0 end
       redis.call('INCR', KEYS[1])
       redis.call('EXPIRE', KEYS[1], 2678400)
       redis.call('INCR', KEYS[2])
       return 1`;
-    const usage = await redis([['EVAL', script, 2, `fixrecord:install-requests:${month}:${installId}`, 'fixrecord:judging-total', access.isPro ? 30 : 3]]);
+    const usage = await redis([['EVAL', script, 2, `fixrecord:install-requests:${month}:${installId}`, 'fixrecord:judging-total', access.isPro ? 30 : 3, judgingRequestLimit]]);
     return usage[0]?.result === 1;
   }
   if (process.env.VERCEL) return false;
@@ -123,7 +124,7 @@ async function allowed(key: string, installId: string, access: AccessIdentity): 
   state.minuteCount++; state.dayCount++;
   memory.set(installId, state);
   if (state.minuteCount > 6 || state.dayCount > 100) return false;
-  if (state.monthlyCount >= (access.isPro ? 30 : 3) || judgingRequests >= 600) return false;
+  if (state.monthlyCount >= (access.isPro ? 30 : 3) || judgingRequests >= judgingRequestLimit) return false;
   state.monthlyCount++; judgingRequests++;
   return true;
 }

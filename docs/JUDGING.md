@@ -36,7 +36,7 @@ Open Settings → FixRecord Pro, choose Monthly or Yearly, and continue through 
 
 AI writing is separate from receipt scanning. Receipts never go to an AI API. The optional writing action sends job text, material names and up to one Before/After photo to the configured server and OpenAI. Review and accept the proposed text before using it.
 
-Use the HTTPS endpoint and private access code in the submission notes, or deploy `backend/` with your own credentials from `.env.example`. Enter the access code when Improve with AI prompts. Codes never belong in source control. A work note or readable job photo is needed. The server validates the code, enforces 3 Free / 30 Pro requests per installation per month and an aggregate 600-request judging cap, and uses Redis for hosted limits. Pro AI demo access is determined by the code, separately from Test Store purchases. The manual workflow remains usable when the endpoint is unavailable or its allowance is exhausted.
+Use the HTTPS endpoint and private access code in the submission notes, or deploy `backend/` with your own credentials from `.env.example`. Enter the access code when Improve with AI prompts. Codes never belong in source control. A work note or readable job photo is needed. The server validates the code, enforces 3 Free / 30 Pro requests per installation per month and an aggregate 1,000-request judging cap, and uses Redis for hosted limits. Pro AI demo access is determined by the code, separately from Test Store purchases. The manual workflow remains usable when the endpoint is unavailable or its allowance is exhausted.
 
 ## Testing and data
 

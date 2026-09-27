@@ -196,8 +196,10 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
       const commands = JSON.parse(options.body);
       return new Response(JSON.stringify(commands.map(([command, key, ...args]) => {
         if (command === 'EVAL') {
-          const [, monthlyKey, totalKey, limit] = args;
-          if ((counters.get(monthlyKey) ?? 0) >= limit || (counters.get(totalKey) ?? 0) >= 600) return { result: 0 };
+          const [, monthlyKey, totalKey, limit, totalLimit] = args;
+          assert.equal(totalLimit, 1000);
+          assert.match(key, /total >= tonumber\(ARGV\[2\]\)/);
+          if ((counters.get(monthlyKey) ?? 0) >= limit || (counters.get(totalKey) ?? 0) >= totalLimit) return { result: 0 };
           counters.set(monthlyKey, (counters.get(monthlyKey) ?? 0) + 1);
           counters.set(totalKey, (counters.get(totalKey) ?? 0) + 1);
           return { result: 1 };
@@ -226,7 +228,7 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
     const second = response();
     await handler(req, second);
     assert.equal(second.statusCode, 200);
-    counters.set('fixrecord:judging-total', 599);
+    counters.set('fixrecord:judging-total', 999);
     req.body.installId = crypto.randomUUID();
     const last = response();
     await handler(req, last);
@@ -236,7 +238,7 @@ test('hosted Redis quota blocks a fourth Free request before OpenAI is called', 
     await handler(req, exhausted);
     assert.equal(exhausted.statusCode, 429);
     assert.equal(modelCalls, 5);
-    assert.equal(counters.get('fixrecord:judging-total'), 600);
+    assert.equal(counters.get('fixrecord:judging-total'), 1000);
   } finally {
     delete process.env.VERCEL;
     delete process.env.UPSTASH_REDIS_REST_KV_REST_API_URL;
