@@ -5,6 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *guidance;
 @property (nonatomic) NSInteger inlierCount;
 @property (nonatomic) BOOL confident;
+@property (nonatomic) BOOL wellAligned;
 @end
 
 @interface MatchShotBridge : NSObject

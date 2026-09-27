@@ -1,0 +1,9 @@
+// Copy to Local.xcconfig (ignored by Git). Use only a PUBLIC RevenueCat SDK key.
+// Obtain the submission values from the private judge notes, or configure your own services.
+REVENUECAT_API_KEY = YOUR_PUBLIC_TEST_STORE_SDK_KEY
+// The empty expansion preserves both URL slashes in xcconfig syntax.
+AI_ENDPOINT =
+// Example: AI_ENDPOINT = https:/$()/YOUR_DEPLOYMENT.vercel.app/api/generate-report
+// Optional for physical-device builds; choose your own signing team and bundle ID.
+// DEVELOPMENT_TEAM = YOUR_TEAM_ID
+// PRODUCT_BUNDLE_IDENTIFIER = com.yourname.fixrecord

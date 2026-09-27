@@ -285,6 +285,7 @@ struct PricingView: View {
     static let shared = EntitlementService()
     @Published private(set) var isPro = false
     @Published private(set) var packages: [Package] = []
+    @Published private(set) var trialDurations: [String: String] = [:]
     @Published var message = ""
     private(set) var configured = false
     private init() {
@@ -297,11 +298,36 @@ struct PricingView: View {
     }
     func refresh() async {
         guard configured else { return }
+        trialDurations = [:]
         do {
             let info = try await Purchases.shared.customerInfo()
             isPro = info.entitlements["pro"]?.isActive == true
-            packages = try await Purchases.shared.offerings().current?.availablePackages ?? []
+            let availablePackages = try await Purchases.shared.offerings().current?.availablePackages ?? []
+            packages = availablePackages.filter { $0.packageType == .monthly || $0.packageType == .annual }
+            let eligibility = await Purchases.shared.checkTrialOrIntroDiscountEligibility(
+                productIdentifiers: packages.map { $0.storeProduct.productIdentifier }
+            )
+            var trials: [String: String] = [:]
+            for package in packages {
+                guard eligibility[package.storeProduct.productIdentifier]?.status == .eligible,
+                      let offer = package.storeProduct.introductoryDiscount,
+                      offer.paymentMode == .freeTrial,
+                      let duration = Self.trialDuration(offer) else { continue }
+                trials[package.identifier] = duration
+            }
+            trialDurations = trials
         } catch { message = error.localizedDescription }
+    }
+    private static func trialDuration(_ offer: StoreProductDiscount) -> String? {
+        let count = offer.subscriptionPeriod.value * offer.numberOfPeriods
+        guard count > 0 else { return nil }
+        switch offer.subscriptionPeriod.unit {
+        case .day: return "\(count) day\(count == 1 ? "" : "s")"
+        case .week: return "\(count * 7) days"
+        case .month: return "\(count) month\(count == 1 ? "" : "s")"
+        case .year: return "\(count) year\(count == 1 ? "" : "s")"
+        @unknown default: return nil
+        }
     }
     func purchase(_ package: Package) async {
         do { let result = try await Purchases.shared.purchase(package: package); isPro = result.customerInfo.entitlements["pro"]?.isActive == true; message = isPro ? "Pro is active." : "No Pro entitlement was granted." }
@@ -321,6 +347,12 @@ struct UpgradeView: View {
     @State private var busy = false
     @State private var loading = true
     @State private var managementMessage: String?
+    @State private var selectedPackageID: String?
+    private var selectedPackage: Package? {
+        service.packages.first { $0.identifier == selectedPackageID }
+            ?? service.packages.first { $0.packageType == .monthly }
+            ?? service.packages.first
+    }
     private var isTestStore: Bool {
         ((Bundle.main.object(forInfoDictionaryKey: "REVENUECAT_API_KEY") as? String) ?? "").hasPrefix("test_")
     }
@@ -354,7 +386,7 @@ struct UpgradeView: View {
                     Divider().padding(.leading, 58)
                     benefit("Premium templates", detail: "A style for every business", icon: "doc.richtext")
                     Divider().padding(.leading, 58)
-                    benefit("Your own branding", detail: "Add your logo. Hide FixRecord's.", icon: "paintbrush.pointed")
+                    benefit("Your own branding", detail: "Add your logo. Remove the footer.", icon: "paintbrush.pointed")
                 }
                 .background(.white, in: RoundedRectangle(cornerRadius: 20))
 
@@ -365,21 +397,22 @@ struct UpgradeView: View {
                 } else if loading {
                     ProgressView("Loading plans…").font(.subheadline).padding()
                 } else {
-                    ForEach(service.packages, id: \.identifier) { package in
-                        Button {
+                    VStack(spacing: 12) {
+                        ForEach(service.packages, id: \.identifier) { package in
+                            planCard(package)
+                        }
+                    }
+                    if let package = selectedPackage {
+                        PrimaryButton(title: busy ? "Please wait…" : service.trialDurations[package.identifier] == nil ? "Continue" : "Start free trial", icon: "arrow.right") {
                             Task {
                                 busy = true
                                 await service.purchase(package)
                                 busy = false
                             }
-                        } label: {
-                            HStack {
-                                Text(package.storeProduct.localizedTitle)
-                                Spacer()
-                                Text(package.storeProduct.localizedPriceString)
-                            }.font(.headline).padding(16).foregroundStyle(.white)
-                                .background(Brand.blue, in: RoundedRectangle(cornerRadius: 14))
                         }.disabled(busy)
+                        Text(subscriptionTerms(package))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                     if service.packages.isEmpty {
                         Text(service.configured ? "Plans are unavailable. Please try again later." : "Purchases aren't enabled in this build.")
@@ -404,17 +437,6 @@ struct UpgradeView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 16) {
-                    DisclosureGroup("If Pro ends") {
-                        Text("Your jobs and saved PDFs stay yours. New exports use Modern with FixRecord branding and no custom logo until Pro is active again.")
-                            .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
-                    }
-                    DisclosureGroup("AI demo allowance") {
-                        Text("A Pro demo code includes 30 AI requests per month; a Free code includes 3. Enter the code separately when using AI.")
-                            .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
-                    }
-                }.font(.subheadline).tint(Brand.blue).padding(16)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 16))
             }.padding(20)
         }.background(Brand.background).navigationTitle("FixRecord Pro").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
@@ -422,6 +444,48 @@ struct UpgradeView: View {
             .alert("Manage subscription", isPresented: Binding(get: { managementMessage != nil }, set: { if !$0 { managementMessage = nil } })) {
                 Button("OK", role: .cancel) { managementMessage = nil }
             } message: { Text(managementMessage ?? "") }
+    }
+
+    private func subscriptionTerms(_ package: Package) -> String {
+        let period = package.packageType == .annual ? "year" : "month"
+        let price = "\(package.storeProduct.localizedPriceString) per \(period)"
+        let terms = service.trialDurations[package.identifier].map { "\($0) free, then \(price)." } ?? "\(price)."
+        return isTestStore ? "\(terms) Test purchase — no charge." : "\(terms) Auto-renews. Cancel anytime."
+    }
+
+    private func planCard(_ package: Package) -> some View {
+        let selected = selectedPackage?.identifier == package.identifier
+        let yearly = package.packageType == .annual
+        return Button {
+            selectedPackageID = package.identifier
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(selected ? Brand.blue : Color.secondary.opacity(0.4))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(yearly ? "Yearly" : "Monthly")
+                        .font(.headline).foregroundStyle(Brand.navy)
+                    if let duration = service.trialDurations[package.identifier] {
+                        Text("\(duration) free").font(.caption.weight(.semibold)).foregroundStyle(Brand.blue)
+                    }
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(package.storeProduct.localizedPriceString)
+                        .font(.headline).foregroundStyle(Brand.navy)
+                    Text(yearly ? "per year" : "per month")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(16).frame(maxWidth: .infinity, minHeight: 76)
+            .background(selected ? Brand.pale : Color.white, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(selected ? Brand.blue : Brand.navy.opacity(0.1), lineWidth: selected ? 1.5 : 1))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain).disabled(busy)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func benefit(_ title: String, detail: String, icon: String) -> some View {

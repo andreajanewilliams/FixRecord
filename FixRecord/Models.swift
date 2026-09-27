@@ -3,6 +3,31 @@ import SwiftData
 import UIKit
 import Observation
 
+enum JobReference {
+    static func prefix(_ value: String) -> String {
+        let cleaned = String(value.components(separatedBy: .whitespacesAndNewlines).joined().trimmingCharacters(in: CharacterSet(charactersIn: "-")).prefix(12))
+        return cleaned.isEmpty ? "FR" : cleaned
+    }
+    static func automatic(prefix value: String, existing: [String], date: Date = Date()) -> String {
+        let base = "\(prefix(value))-\(Int(date.timeIntervalSince1970))"
+        let used = Set(existing.map { $0.lowercased() })
+        var candidate = base
+        var suffix = 2
+        while used.contains(candidate.lowercased()) { candidate = "\(base)-\(suffix)"; suffix += 1 }
+        return candidate
+    }
+    static func validation(_ value: String, existing: [String]) -> String? {
+        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return "Enter a job reference." }
+        if cleaned.count > 40 { return "Use 40 characters or fewer." }
+        if cleaned.rangeOfCharacter(from: .newlines) != nil { return "Use a single line." }
+        if existing.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(cleaned) == .orderedSame }) {
+            return "Another job already uses this reference."
+        }
+        return nil
+    }
+}
+
 enum JobCategories {
     static let builtIn = ["Plumbing", "Electrical", "HVAC", "Installation", "Carpentry", "Painting", "Maintenance", "Inspection"]
 }
@@ -126,6 +151,12 @@ struct JobPhoto: Codable, Identifiable, Hashable {
     var capturedAt = Date()
     var pairedBeforeID: UUID?
     var note = ""
+    // Missing in older saved jobs; those photos remain included by default.
+    var excludedFromReport: Bool?
+    var includeInReport: Bool {
+        get { excludedFromReport != true }
+        set { excludedFromReport = !newValue }
+    }
 }
 
 struct PriceItem: Codable, Identifiable, Hashable {

@@ -162,16 +162,20 @@ struct OnboardingView: View {
 
 struct JobEditView: View {
     private struct Details: Equatable {
-        let title, clientName, siteAddress, issue, technician, category, clientEmail, clientPhone: String
+        let number, title, clientName, siteAddress, issue, technician, category, clientEmail, clientPhone: String
         let createdAt: Date
         init(_ job: Job) {
-            title = job.title; clientName = job.clientName; siteAddress = job.siteAddress
+            number = job.number; title = job.title; clientName = job.clientName; siteAddress = job.siteAddress
             issue = job.issue; technician = job.technician; category = job.category
             clientEmail = job.clientEmail; clientPhone = job.clientPhone; createdAt = job.createdAt
         }
     }
     @Environment(\.dismiss) private var dismiss
     @Bindable var job: Job
+    @Query private var jobs: [Job]
+    @State private var reference = ""
+    private var referenceError: String? { JobReference.validation(reference, existing: jobs.filter { $0.id != job.id }.map(\.number)) }
+    private func saveReference() { if referenceError == nil { job.number = reference.trimmingCharacters(in: .whitespacesAndNewlines) } }
     @State private var showingCategory = false
     @State private var initialDetails: Details?
     var body: some View {
@@ -179,6 +183,9 @@ struct JobEditView: View {
             VStack(alignment: .leading, spacing: 16) {
                 JobFormHeading("Job")
                 JobFormCard {
+                    JobTextField("Job reference", placeholder: "e.g. JOB-001", text: $reference)
+                    if let referenceError { Text(referenceError).font(.caption).foregroundStyle(.red) }
+                    JobFormDivider()
                     JobTextField("Job title", placeholder: "e.g. Kitchen Sink Repair", text: $job.title)
                     JobFormDivider()
                     JobTextField("Client name", placeholder: "e.g. Sarah Mitchell", text: $job.clientName)
@@ -204,10 +211,10 @@ struct JobEditView: View {
                     JobTextField("Phone", placeholder: "Client phone", text: $job.clientPhone)
                 }
             }.padding(18)
-        }.background(Brand.background).navigationTitle("Edit Job").toolbar { Button("Done") { dismiss() } }
+        }.background(Brand.background).navigationTitle("Edit Job").toolbar { Button("Done") { saveReference(); dismiss() }.disabled(referenceError != nil) }
             .sheet(isPresented: $showingCategory) { CategorySelectionSheet(value: job.category) { job.category = $0 } }
-            .onAppear { if initialDetails == nil { initialDetails = Details(job) } }
-            .onDisappear { if let initialDetails, initialDetails != Details(job) { job.technicianConfirmed = false } }
+            .onAppear { if initialDetails == nil { initialDetails = Details(job); reference = job.number } }
+            .onDisappear { saveReference(); if let initialDetails, initialDetails != Details(job) { job.technicianConfirmed = false } }
     }
 }
 
@@ -218,13 +225,106 @@ struct PhotoReviewView: View {
             .background(Brand.background).navigationTitle("Photos")
     }
     private func photoSection(_ kind: PhotoKind) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(kind == .before ? "Before" : "After").font(.title3.bold()).foregroundStyle(Brand.navy)
-            ForEach(job.photos.filter { $0.kind == kind }) { photo in
-                PhotoReviewItemView(job: job, photo: photo)
+        JobPhotoSection(job: job, kind: kind)
+    }
+}
+
+private struct JobPhotoSection: View {
+    @Bindable var job: Job
+    let kind: PhotoKind
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var showingAddOptions = false
+    @State private var importing = false
+    @State private var importError: String?
+    @State private var selectedBeforeID: UUID?
+    @State private var initialisedMatch = false
+    private var photos: [JobPhoto] { job.photos.filter { $0.kind == kind } }
+    private var beforePhotos: [JobPhoto] { job.photos.filter { $0.kind == .before } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(kind == .before ? "Before" : "After").font(.title3.bold()).foregroundStyle(Brand.navy)
+                Spacer()
+                if !photos.isEmpty {
+                    Button { showingAddOptions.toggle() } label: {
+                        Image(systemName: showingAddOptions ? "minus.circle.fill" : "plus.circle.fill")
+                            .font(.title2).frame(width: 44, height: 44)
+                    }.accessibilityLabel(showingAddOptions ? "Hide photo options" : "Add more \(kind.rawValue) photos")
+                }
             }
-            NavigationLink { PhotoCaptureView(job: job, kind: kind) } label: { Label("Add \(kind == .before ? "Before" : "After") Photo", systemImage: "camera") }.buttonStyle(.bordered)
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(.white, in: RoundedRectangle(cornerRadius: 15))
+            ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                VStack(alignment: .leading, spacing: 6) {
+                    if photos.count > 1 {
+                        Text("\(kind == .before ? "Before" : "After") \(index + 1)")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    PhotoReviewItemView(job: job, photo: photo)
+                }
+            }
+            if photos.isEmpty || showingAddOptions {
+                if kind == .after && !beforePhotos.isEmpty {
+                    Picker("Match to", selection: $selectedBeforeID) {
+                        Text("No matching Before").tag(nil as UUID?)
+                        ForEach(Array(beforePhotos.enumerated()), id: \.element.id) { index, photo in
+                            Text("Before \(index + 1)").tag(Optional(photo.id))
+                        }
+                    }.pickerStyle(.menu).font(.subheadline)
+                }
+                HStack(spacing: 12) {
+                    NavigationLink {
+                        PhotoCaptureView(job: job, kind: kind, initialBeforeID: selectedBeforeID)
+                    } label: {
+                        Label("Camera", systemImage: "camera").frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    PhotosPicker(selection: $selectedItems, selectionBehavior: .ordered, matching: .images) {
+                        Label("Upload", systemImage: "photo.on.rectangle").frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                }.buttonStyle(.bordered).disabled(importing)
+            }
+            if importing { ProgressView("Adding photos…").font(.caption) }
+            if let importError { Text(importError).font(.caption).foregroundStyle(.red) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+        .background(.white, in: RoundedRectangle(cornerRadius: 15))
+        .onAppear {
+            if !initialisedMatch { selectedBeforeID = beforePhotos.first?.id; initialisedMatch = true }
+        }
+        .onChange(of: beforePhotos.map(\.id)) { oldIDs, newIDs in
+            if oldIDs.isEmpty { selectedBeforeID = newIDs.first }
+            else if let selectedBeforeID, !newIDs.contains(selectedBeforeID) { self.selectedBeforeID = nil }
+        }
+        .onChange(of: photos.count) { oldCount, newCount in
+            if newCount > oldCount { showingAddOptions = false }
+        }
+        .onChange(of: selectedItems) { _, items in
+            guard !items.isEmpty, !importing else { return }
+            importing = true
+            let matchedBeforeID = kind == .after ? selectedBeforeID : nil
+            Task { await importPhotos(items, matchedBeforeID: matchedBeforeID) }
+        }
+    }
+
+    @MainActor private func importPhotos(_ items: [PhotosPickerItem], matchedBeforeID: UUID?) async {
+        importError = nil
+        var failed = 0
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
+                    failed += 1; continue
+                }
+                let filename = try PhotoStore.save(image)
+                // Only pair with a Before photo that still exists after the import.
+                let match = beforePhotos.contains(where: { $0.id == matchedBeforeID }) ? matchedBeforeID : nil
+                var updated = job.photos
+                updated.append(JobPhoto(kind: kind, filename: filename, pairedBeforeID: match))
+                job.photos = updated
+                job.technicianConfirmed = false
+            } catch { failed += 1 }
+        }
+        if failed > 0 { importError = "\(failed) photo\(failed == 1 ? "" : "s") could not be added. Please try again." }
+        selectedItems = []
+        importing = false
     }
 }
 
@@ -232,6 +332,11 @@ struct PhotoReviewItemView: View {
     @Bindable var job: Job
     let photo: JobPhoto
     @State private var replacement: PhotosPickerItem?
+    @State private var qualityWarning: String?
+    @State private var alignmentGuidance: String?
+    private var matchedBefore: JobPhoto? {
+        job.photos.first { $0.kind == .before && $0.id == photo.pairedBeforeID }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let image = PhotoStore.image(photo.filename) {
@@ -242,6 +347,36 @@ struct PhotoReviewItemView: View {
                 Spacer()
                 Button(role: .destructive) { remove() } label: { Label("Delete", systemImage: "trash") }
             }.font(.subheadline)
+            Toggle("Include in report", isOn: Binding(
+                get: { job.photos.first(where: { $0.id == photo.id })?.includeInReport ?? true },
+                set: { included in
+                    var photos = job.photos
+                    guard let index = photos.firstIndex(where: { $0.id == photo.id }) else { return }
+                    photos[index].includeInReport = included
+                    job.photos = photos
+                    job.technicianConfirmed = false
+                }
+            )).font(.subheadline).tint(Brand.blue)
+            if photo.kind == .after, let index = job.photos.filter({ $0.kind == .before }).firstIndex(where: { $0.id == photo.pairedBeforeID }) {
+                Text("Matched to Before \(index + 1)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let alignmentGuidance {
+                Label(alignmentGuidance, systemImage: "viewfinder").font(.caption).foregroundStyle(Brand.teal)
+            }
+            if let qualityWarning {
+                Label(qualityWarning, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .task(id: photo.filename + "|" + (matchedBefore?.filename ?? "")) {
+            qualityWarning = PhotoStore.image(photo.filename).flatMap { ImageQuality.warning(for: $0) }
+            alignmentGuidance = nil
+            if photo.kind == .after,
+               let before = matchedBefore,
+               let original = PhotoStore.image(before.filename), let image = PhotoStore.image(photo.filename) {
+                let result = MatchShotBridge.compare(before: original, after: image)
+                alignmentGuidance = result.wellAligned ? nil : result.guidance
+            }
         }
         .onChange(of: replacement) { _, item in
             Task {
@@ -261,11 +396,31 @@ struct PhotoReviewItemView: View {
 }
 
 struct SettingsView: View {
+    @StateObject private var entitlements = EntitlementService.shared
     @Environment(\.modelContext) private var context
     @State private var editingProfile: BusinessProfile?
     let profile: BusinessProfile?
     var body: some View {
         List {
+            Section {
+                NavigationLink { UpgradeView() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "star.fill")
+                            .font(.title3).foregroundStyle(Brand.blue)
+                            .frame(width: 44, height: 44)
+                            .background(Brand.pale, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("FixRecord Pro").font(.headline).foregroundStyle(Brand.navy)
+                            Text(entitlements.isPro ? "Manage subscription" : "View plans")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if entitlements.isPro {
+                            Text("Active").font(.caption.weight(.semibold)).foregroundStyle(Brand.teal)
+                        }
+                    }.padding(.vertical, 4)
+                }
+            }
             Section {
                 if let profile { NavigationLink { BusinessProfileView(profile: profile) } label: { Label("Business Details", systemImage: "building.2") } }
                 else { Button { let value = BusinessProfile(); context.insert(value); editingProfile = value } label: { Label("Business Details", systemImage: "building.2") } }
@@ -277,10 +432,10 @@ struct SettingsView: View {
             }
             Section {
                 NavigationLink { AIAccessCodeView() } label: { Label("AI Access Code", systemImage: "key") }
-                NavigationLink { UpgradeView() } label: { Label("Upgrade to Pro / Manage Plan", systemImage: "star") }
                 NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
             }
         }.navigationTitle("Settings")
+            .task { await entitlements.refresh() }
             .sheet(item: $editingProfile) { value in NavigationStack { BusinessProfileView(profile: value) } }
     }
 }
@@ -299,7 +454,7 @@ struct AIAccessCodeView: View {
     var body: some View {
         Form {
             Section {
-                if let warning, message.isEmpty { Label(warning, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(.orange) }
+                if let warning, message.isEmpty { errorNotice(warning) }
                 SecureField("Access code", text: $code)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -309,7 +464,7 @@ struct AIAccessCodeView: View {
             }
             if !message.isEmpty {
                 Section {
-                    if messageIsError { Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                    if messageIsError { errorNotice(message) }
                     else { Text(message).foregroundStyle(.secondary) }
                 }
             }
@@ -341,6 +496,14 @@ struct AIAccessCodeView: View {
         }
         .onAppear { saved = AIAccessCodeStore.load() != nil }
         .onDisappear { cancelCheck() }
+    }
+    private func errorNotice(_ text: String) -> some View {
+        Label {
+            Text(text).foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+        }
+        .font(.subheadline)
     }
     private func cancelCheck() {
         checkID = UUID()
@@ -385,6 +548,7 @@ struct AIAccessCodeView: View {
 }
 
 struct JobDefaultsView: View {
+    @AppStorage("defaultJobReferencePrefix") private var referencePrefix = ""
     @Query private var profiles: [BusinessProfile]
     @AppStorage("defaultCurrencyCode") private var defaultCurrencyCode = ""
     @State private var defaults = JobDefaultsService.shared
@@ -399,6 +563,12 @@ struct JobDefaultsView: View {
                     settingRow("Default Category", value: defaults.state.categoryMode == .lastUsed ? "Last Used" : defaults.state.categoryMode == .none ? "None" : category)
                 }
             } footer: { Text("Automatic technician uses Business Details first, then the most recently used name.") }
+            Section {
+                TextField("Prefix (e.g. FR or JOB)", text: $referencePrefix)
+                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                Text("Example: \(JobReference.automatic(prefix: referencePrefix.isEmpty ? (profiles.first?.invoicePrefix ?? "FR") : referencePrefix, existing: []))")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: { Text("Job references") } footer: { Text("Used for new jobs. A preset can supply its own prefix. Edit any reference in Job Details.") }
             Section("Categories") {
                 NavigationLink { ManageCustomCategoriesView() } label: { Text("Manage Custom Categories") }
             }
@@ -492,18 +662,9 @@ struct ManageCustomCategoriesView: View {
 }
 
 struct DataManagementView: View {
-    @Environment(\.modelContext) private var context
-    @Query private var jobs: [Job]
-    #if DEBUG
-    @AppStorage("didCompleteOnboarding") private var didCompleteOnboarding = false
-    #endif
     var body: some View {
         List {
             Section("On this device") { Text("Jobs and photos are stored locally. Export PDFs before removing the app.") }
-            Section("Example") { Button("Add Example Job") { if !jobs.contains(where: { $0.isSample }) { context.insert(SampleJob.make()) } }; Text("The example is clearly labelled and can be removed from Jobs.").font(.caption).foregroundStyle(.secondary) }
-            #if DEBUG
-            Section("Testing") { Button("Replay Onboarding") { didCompleteOnboarding = false } }
-            #endif
         }.navigationTitle("Data Management")
     }
 }
@@ -518,7 +679,21 @@ struct AboutView: View {
     }
 }
 
-enum DocumentTemplate: String, CaseIterable, Codable { case modern = "Modern", minimal = "Minimal", classic = "Classic" }
+enum DocumentTemplate: String, CaseIterable, Codable {
+    case modern = "Modern", minimal = "Minimal", classic = "Classic", studio = "Studio", blueprint = "Blueprint"
+    case executive = "Executive", editorial = "Editorial", precision = "Precision", copper = "Copper", horizon = "Horizon"
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        // Preserve saved jobs and presets that used the retired Sage design.
+        if value == "Sage" { self = .executive; return }
+        guard let template = Self(rawValue: value) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown document template")
+        }
+        self = template
+    }
+}
 
 struct BusinessSnapshot: Codable, Equatable {
     var businessName = ""
@@ -666,6 +841,12 @@ struct DocumentOptions: Codable, Equatable {
     var showPaymentInstructions = true
     var showTerms = true
     var showDiscount = true
+    // Older presets keep labels visible when this setting is absent.
+    var hidePhotoLabels: Bool?
+    var showPhotoLabels: Bool {
+        get { hidePhotoLabels != true }
+        set { hidePhotoLabels = !newValue }
+    }
 
     static func load() -> Self {
         guard let data = UserDefaults.standard.data(forKey: "documentOptions"), let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
@@ -809,16 +990,7 @@ struct PresetEditorView: View {
     var body: some View {
         Form {
             if editName { Section("Preset name") { TextField("e.g. Standard repair", text: $preset.name) } }
-            Section("Business and logo") {
-                if let image = PhotoStore.image(preset.business.logoFilename) {
-                    Image(uiImage: image).resizable().scaledToFit().frame(height: 64)
-                }
-                if entitlements.isPro {
-                    PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images).disabled(loadingLogo)
-                    if !preset.business.logoFilename.isEmpty { Button("Remove logo") { preset.business.logoFilename = "" } }
-                } else { lockedOption("Choose business logo", detail: "Available with Pro") }
-                if loadingLogo { ProgressView("Loading logo…") }
-                if !logoError.isEmpty { Text(logoError).font(.caption).foregroundStyle(.red) }
+            Section("Business details") {
                 TextField("Business name", text: $preset.business.businessName)
                 TextField("Owner / contractor", text: $preset.business.ownerName)
                 TextField("Email", text: $preset.business.email).keyboardType(.emailAddress)
@@ -828,7 +1000,18 @@ struct PresetEditorView: View {
                 TextField("Payment instructions", text: $preset.business.paymentInstructions, axis: .vertical)
                 CurrencyPickerRow(currencyCode: $preset.business.currencyCode)
                 TextField("Tax / VAT %", text: $preset.business.taxRate).keyboardType(.decimalPad)
-                TextField("Invoice prefix", text: $preset.business.invoicePrefix)
+                TextField("Job reference prefix", text: $preset.business.invoicePrefix)
+            }
+            Section("Business logo · Pro") {
+                if let image = PhotoStore.image(preset.business.logoFilename) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(height: 64)
+                }
+                if entitlements.isPro {
+                    PhotosPicker("Choose logo", selection: $selectedLogo, matching: .images).disabled(loadingLogo)
+                    if !preset.business.logoFilename.isEmpty { Button("Remove logo") { preset.business.logoFilename = "" } }
+                } else { lockedOption("Choose business logo", detail: "Available with Pro") }
+                if loadingLogo { ProgressView("Loading logo…") }
+                if !logoError.isEmpty { Text(logoError).font(.caption).foregroundStyle(.red) }
             }
             if editName {
                 Section {
@@ -878,12 +1061,13 @@ struct PresetEditorView: View {
                 if entitlements.isPro { Toggle("Show business logo", isOn: $preset.options.showLogo) }
                 else { lockedOption("Show business logo", detail: "Off on Free") }
                 Toggle("Show business details", isOn: $preset.options.showBusinessDetails)
-                if entitlements.isPro { Toggle("Show FixRecord branding", isOn: $preset.options.showFixRecordBranding) }
-                else { lockedOption("Hide FixRecord branding", detail: "Branding stays on with Free") }
+                if entitlements.isPro { Toggle("Show FixRecord footer", isOn: $preset.options.showFixRecordBranding) }
+                else { lockedOption("Remove FixRecord footer", detail: "Included on Free exports") }
             } header: { Text("Document layout") }
               footer: { Text("Modern and the unmarked settings are free. Pro unlocks other layouts, logos and branding removal.") }
             Section("Work report") {
                 Toggle("Show before & after photos", isOn: $preset.includePhotos)
+                Toggle("Show Before / After labels", isOn: $preset.options.showPhotoLabels)
                 Toggle("Show reported issue", isOn: $preset.options.showReportedIssue)
                 Toggle("Show materials used", isOn: $preset.options.showMaterials)
                 Toggle("Show technician confirmation", isOn: $preset.options.showTechnicianConfirmation)
@@ -900,8 +1084,7 @@ struct PresetEditorView: View {
             }
         }.navigationTitle(editName ? (preset.name.isEmpty ? "New Preset" : "Edit Preset") : "Customise Job")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") { onSave(preset); dismiss() }
                         .disabled(loadingLogo || (editName && preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
@@ -962,10 +1145,6 @@ struct TemplatesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("Make every job look professional.").font(.title2.bold()).foregroundStyle(Brand.navy)
-                    Text("Preview a matching report and invoice, then choose your style.").font(.subheadline).foregroundStyle(.secondary)
-                }
                 ForEach(DocumentTemplate.allCases, id: \.self) { template in
                     VStack(alignment: .leading, spacing: 16) {
                         Button { preview = template } label: {
@@ -984,20 +1163,41 @@ struct TemplatesView: View {
                         HStack {
                             Text(template.rawValue).font(.title3.bold())
                             if template != .modern {
-                                Text("PRO").font(.caption2.bold()).padding(.horizontal, 7).padding(.vertical, 4)
-                                    .foregroundStyle(Brand.blue).background(Brand.pale, in: Capsule())
+                                Button {
+                                    if !entitlements.isPro { showingUpgrade = true }
+                                } label: {
+                                    Label("PRO", systemImage: entitlements.isPro ? "star.fill" : "lock.fill")
+                                        .font(.caption2.bold()).padding(.horizontal, 8).padding(.vertical, 5)
+                                        .foregroundStyle(Brand.blue).background(Brand.pale, in: Capsule())
+                                        .frame(minHeight: 44)
+                                }.buttonStyle(.plain)
+                                    .disabled(entitlements.isPro)
+                                    .accessibilityLabel(entitlements.isPro ? "Pro template" : "View Pro plans")
                             }
                             Spacer()
                             if selected == template { Label("Selected", systemImage: "checkmark.circle.fill").font(.caption.weight(.semibold)).foregroundStyle(Brand.blue) }
                         }.foregroundStyle(Brand.navy)
-                        Text(description(template)).font(.subheadline).foregroundStyle(.secondary)
                         HStack(spacing: 12) {
-                            Button("Preview") { preview = template }.buttonStyle(.bordered)
-                            Button(selected == template ? "Selected" : entitlements.isPro || template == .modern ? "Use template" : "Unlock with Pro") {
-                                if entitlements.isPro || template == .modern { options.template = template; options.save() }
-                                else { showingUpgrade = true }
-                            }.buttonStyle(.borderedProminent).disabled(selected == template)
-                        }.controlSize(.large)
+                            Button { preview = template } label: {
+                                Label("Preview", systemImage: "arrow.up.left.and.arrow.down.right")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(minHeight: 44)
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain).foregroundStyle(Brand.blue)
+                            Spacer()
+                            if selected != template && (entitlements.isPro || template == .modern) {
+                                Button {
+                                    options.template = template
+                                    options.save()
+                                } label: {
+                                    Text("Use template")
+                                        .font(.subheadline.weight(.semibold))
+                                        .padding(.horizontal, 18).frame(minHeight: 44)
+                                        .foregroundStyle(.white)
+                                        .background(Brand.blue, in: RoundedRectangle(cornerRadius: 12))
+                                }.buttonStyle(.plain)
+                            }
+                        }
                     }.padding(16).background(Brand.background, in: RoundedRectangle(cornerRadius: 20))
                         .overlay(RoundedRectangle(cornerRadius: 20).stroke(selected == template ? Brand.blue.opacity(0.5) : Color.primary.opacity(0.07), lineWidth: 1))
                 }
@@ -1028,13 +1228,7 @@ struct TemplatesView: View {
                 await entitlements.refresh()
             }
     }
-    private func description(_ template: DocumentTemplate) -> String {
-        switch template {
-        case .modern: return "Clear blue details and a practical layout for everyday jobs."
-        case .minimal: return "A quiet, centred letterhead with fine rules and open space. Clean on screen and economical to print."
-        case .classic: return "A bold navy letterhead, warm brass accents and structured details for a more established business feel."
-        }
-    }
+
 }
 
 struct DocumentSettingsView: View {
@@ -1047,10 +1241,11 @@ struct DocumentSettingsView: View {
             Section("Branding") {
                 proToggle("Show business logo", value: $options.showLogo)
                 Toggle("Show business details", isOn: $options.showBusinessDetails)
-                proToggle("Show FixRecord branding", value: $options.showFixRecordBranding, reversedGate: true)
+                proToggle("Show FixRecord footer", value: $options.showFixRecordBranding, reversedGate: true)
             }
             Section("Work Report") {
                 Toggle("Show before & after photos", isOn: $showPhotosInWorkReport)
+                Toggle("Show Before / After labels", isOn: $options.showPhotoLabels)
                 Toggle("Show reported issue", isOn: $options.showReportedIssue)
                 Toggle("Show materials used", isOn: $options.showMaterials)
                 Toggle("Show technician confirmation", isOn: $options.showTechnicianConfirmation)

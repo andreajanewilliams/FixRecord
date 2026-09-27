@@ -77,7 +77,10 @@
         result.confident = YES;
         double x = median(dx);
         double y = median(dy);
-        if (std::abs(x) < 0.09 && std::abs(y) < 0.09) result.guidance = @"Good framing — review the pair before sharing.";
+        if (std::abs(x) < 0.09 && std::abs(y) < 0.09) {
+            result.wellAligned = YES;
+            result.guidance = @"Good framing — review the pair before sharing.";
+        }
         else if (std::abs(x) >= std::abs(y)) result.guidance = x > 0 ? @"Align slightly right." : @"Align slightly left.";
         else result.guidance = y > 0 ? @"Align slightly lower." : @"Align slightly higher.";
     } catch (...) {

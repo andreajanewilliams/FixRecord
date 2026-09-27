@@ -156,7 +156,7 @@ struct HomeView: View {
             } message: { Text(duplicateError ?? "") }
     }
     private func duplicate(_ job: Job) {
-        let prefix = job.duplicateNumberPrefix
+        let prefix = JobReference.prefix(job.duplicateNumberPrefix)
         let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4))"
         let copy = job.duplicated(number: number)
         context.insert(copy)
@@ -324,9 +324,9 @@ struct CreateJobView: View {
             }
     }
     private func save() {
-        let selectedPrefix = chosenPreset?.business.invoicePrefix ?? profile?.invoicePrefix ?? ""
-        let prefix = selectedPrefix.isEmpty ? "FR" : selectedPrefix
-        let number = "\(prefix)-\(Int(Date().timeIntervalSince1970))"
+        let savedPrefix = UserDefaults.standard.string(forKey: "defaultJobReferencePrefix") ?? ""
+        let selectedPrefix = chosenPreset?.business.invoicePrefix ?? (savedPrefix.isEmpty ? (profile?.invoicePrefix ?? "FR") : savedPrefix)
+        let number = JobReference.automatic(prefix: selectedPrefix, existing: jobs.map(\.number))
         let job = Job(number: number, title: title.trimmingCharacters(in: .whitespacesAndNewlines), clientName: client.trimmingCharacters(in: .whitespacesAndNewlines), siteAddress: address.trimmingCharacters(in: .whitespacesAndNewlines), category: category, issue: issue.trimmingCharacters(in: .whitespacesAndNewlines), technician: technician.trimmingCharacters(in: .whitespacesAndNewlines), businessName: profile?.businessName ?? "", currencyCode: currencyCode, taxRate: profile?.taxRate ?? "0")
         job.createdAt = date
         var documentPreset = chosenPreset ?? SavedPreset.custom(profile: profile)
@@ -405,8 +405,7 @@ struct CategorySelectionSheet: View {
                     }
                 }.padding(18)
             }.background(Brand.background).navigationTitle("Select Category").navigationBarTitleDisplayMode(.inline)
-                .safeAreaInset(edge: .bottom) { PrimaryButton(title: "Done", icon: "checkmark") { finish() }.padding(18).background(Brand.background) }
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { finish() } } }
         }.presentationDetents([.large])
             .onAppear { selected = value.isEmpty ? .none : .category(value) }
             .alert("Choose another name", isPresented: Binding(get: { !error.isEmpty }, set: { if !$0 { error = "" } })) { Button("OK", role: .cancel) { error = "" } } message: { Text(error) }
@@ -438,15 +437,8 @@ struct JobPhotoStep: View {
     let job: Job
     let onDone: () -> Void
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Image(systemName: "camera.fill").font(.largeTitle).foregroundStyle(Brand.blue).padding(18).background(Brand.pale, in: RoundedRectangle(cornerRadius: 18))
-                Text("Add photos when useful").font(.title2.bold()).foregroundStyle(Brand.navy)
-                Text("Your job is saved. You can capture before and after photos now, or continue without them.").foregroundStyle(.secondary)
-                NavigationLink { PhotoCaptureView(job: job, kind: .before) } label: { Label("Capture Before", systemImage: "camera").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.bordered)
-                NavigationLink { PhotoCaptureView(job: job, kind: .after) } label: { Label("Capture After", systemImage: "camera.fill").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.bordered)
-            }.padding(22)
-        }.background(Brand.background).navigationTitle("Photos").navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
+        PhotoReviewView(job: job)
+            .navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
             .safeAreaInset(edge: .bottom) { PrimaryButton(title: job.photos.isEmpty ? "Continue without Photos" : "Finish Job", icon: "checkmark") { onDone() }.padding(18).background(Brand.background) }
     }
 }
@@ -523,7 +515,7 @@ struct BusinessProfileView: View {
                 TextField("Email", text: $profile.email).keyboardType(.emailAddress); TextField("Phone", text: $profile.phone).keyboardType(.phonePad)
                 TextField("Address", text: $profile.address, axis: .vertical); TextField("Tax / VAT number (optional)", text: $profile.taxNumber)
             }
-            Section("Invoice defaults") { CurrencyPickerRow(currencyCode: $profile.currencyCode); TextField("Default Tax / VAT %", text: $profile.taxRate).keyboardType(.decimalPad); TextField("Invoice prefix", text: $profile.invoicePrefix); TextField("Payment instructions", text: $profile.paymentInstructions, axis: .vertical).lineLimit(2...5) }
+            Section("Invoice defaults") { CurrencyPickerRow(currencyCode: $profile.currencyCode); TextField("Default Tax / VAT %", text: $profile.taxRate).keyboardType(.decimalPad); TextField("Job reference prefix", text: $profile.invoicePrefix); TextField("Payment instructions", text: $profile.paymentInstructions, axis: .vertical).lineLimit(2...5) }
         }.navigationTitle("Business Details")
             .sheet(isPresented: $showingUpgrade) { NavigationStack { UpgradeView() } }
             .task { await entitlements.refresh() }

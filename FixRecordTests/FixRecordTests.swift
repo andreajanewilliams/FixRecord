@@ -5,6 +5,75 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testCustomJobReferencesAndAutomaticFallback() {
+        XCTAssertEqual(JobReference.prefix(" JOB- "), "JOB")
+        XCTAssertEqual(JobReference.prefix("  "), "FR")
+        XCTAssertEqual(JobReference.automatic(prefix: "JOB-", existing: ["job-100", "JOB-100-2"], date: Date(timeIntervalSince1970: 100)), "JOB-100-3")
+        XCTAssertNotNil(JobReference.validation(" ", existing: []))
+        XCTAssertNotNil(JobReference.validation(" client-42 ", existing: ["CLIENT-42"]))
+        XCTAssertNil(JobReference.validation("CLIENT-43", existing: ["CLIENT-42"]))
+    }
+
+    func testCustomReferenceAppearsOnReportAndInvoice() throws {
+        let job = SampleJob.make()
+        job.number = "ACME-0042"
+        for kind in [ExportKind.report, .invoice] {
+            let pdf = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: kind, job: job, profile: nil, options: DocumentOptions())))
+            XCTAssertTrue((pdf.string ?? "").contains("ACME-0042"))
+        }
+    }
+
+    func testPhotoLabelsCanBeHiddenWithoutRemovingPhotos() throws {
+        let job = SampleJob.make()
+        var options = DocumentOptions()
+        let labelled = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options)))
+        XCTAssertTrue((labelled.string ?? "").contains("BEFORE"))
+        XCTAssertTrue((labelled.string ?? "").contains("AFTER"))
+        options.showPhotoLabels = false
+        let unlabelled = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options)))
+        XCTAssertFalse((unlabelled.string ?? "").contains("BEFORE"))
+        XCTAssertFalse((unlabelled.string ?? "").contains("AFTER"))
+        XCTAssertEqual(unlabelled.pageCount, labelled.pageCount)
+        XCTAssertEqual(job.photos.count, 2)
+        let saved = try JSONEncoder().encode(options)
+        XCTAssertFalse(try JSONDecoder().decode(DocumentOptions.self, from: saved).showPhotoLabels)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        legacy.removeValue(forKey: "hidePhotoLabels")
+        XCTAssertTrue(try JSONDecoder().decode(DocumentOptions.self, from: JSONSerialization.data(withJSONObject: legacy)).showPhotoLabels)
+    }
+
+    func testPhotoReportSelectionPreservesLegacyPhotosAndRoundTrips() throws {
+        let original = JobPhoto(kind: .before, filename: "saved-photo")
+        let encoded = try JSONEncoder().encode(original)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "excludedFromReport")
+        var decoded = try JSONDecoder().decode(JobPhoto.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(decoded.id, original.id)
+        XCTAssertTrue(decoded.includeInReport)
+        decoded.includeInReport = false
+        let restored = try JSONDecoder().decode(JobPhoto.self, from: JSONEncoder().encode(decoded))
+        XCTAssertFalse(restored.includeInReport)
+        XCTAssertEqual(restored.filename, original.filename)
+    }
+
+    func testExcludedPhotosDoNotLeaveEmptyReportPairs() {
+        var before = JobPhoto(kind: .before, filename: "before")
+        var after = JobPhoto(kind: .after, filename: "after", pairedBeforeID: before.id)
+        before.includeInReport = false
+        let afterOnly = PDFMaker.photoPairs(before: [before], after: [after])
+        XCTAssertEqual(afterOnly.count, 1)
+        XCTAssertNil(afterOnly.first?.0)
+        XCTAssertEqual(afterOnly.first?.1?.id, after.id)
+        before.includeInReport = true
+        after.includeInReport = false
+        let beforeOnly = PDFMaker.photoPairs(before: [before], after: [after])
+        XCTAssertEqual(beforeOnly.count, 1)
+        XCTAssertEqual(beforeOnly.first?.0?.id, before.id)
+        XCTAssertNil(beforeOnly.first?.1)
+        before.includeInReport = false
+        XCTAssertTrue(PDFMaker.photoPairs(before: [before], after: [after]).isEmpty)
+    }
+
     func testDuplicatedJobKeepsReusableDetailsButStartsFresh() {
         let original = SampleJob.make()
         original.clientEmail = "sarah@example.com"
@@ -394,6 +463,21 @@ final class FixRecordTests: XCTestCase {
             }
         }
     }
+    func testRetiredSageTemplatePreservesSavedDocumentOptions() throws {
+        var options = DocumentOptions()
+        options.template = .executive
+        options.showLogo = true
+        let encoded = try JSONEncoder().encode(options)
+        let saved = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+            .replacingOccurrences(of: "Executive", with: "Sage")
+        let restored = try JSONDecoder().decode(DocumentOptions.self, from: Data(saved.utf8))
+        XCTAssertEqual(restored.template, .executive)
+        XCTAssertTrue(restored.showLogo)
+        for template in DocumentTemplate.allCases {
+            let data = try JSONEncoder().encode(template)
+            XCTAssertEqual(try JSONDecoder().decode(DocumentTemplate.self, from: data), template)
+        }
+    }
     func testPDFAndAIFallbackDecoding() throws {
         let job = SampleJob.make()
         let data = try PDFMaker.make(kind: .pack, job: job, profile: nil, isPro: true)
@@ -466,11 +550,34 @@ final class FixRecordTests: XCTestCase {
         options.showMaterials = false
         let free = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options)))
         let pro = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: .report, job: job, profile: nil, options: options, isPro: true)))
-        XCTAssertTrue((free.string ?? "").contains("Generated with FixRecord"))
-        XCTAssertFalse((pro.string ?? "").contains("Generated with FixRecord"))
+        XCTAssertTrue((free.string ?? "").contains("Created with FixRecord"))
+        XCTAssertFalse((pro.string ?? "").contains("Created with FixRecord"))
         XCTAssertFalse((pro.string ?? "").contains("REPORTED ISSUE"))
         XCTAssertFalse((pro.string ?? "").contains("MATERIALS USED"))
         XCTAssertTrue((pro.string ?? "").contains("WORK COMPLETED"))
+    }
+
+    func testFreeExportsKeepBusinessIdentityAndRequireOnlyFooterBranding() throws {
+        let job = SampleJob.make()
+        let profile = BusinessProfile()
+        profile.businessName = "Williams Repairs"
+        profile.email = "hello@example.com"
+        profile.phone = "012 345 6789"
+        var options = DocumentOptions()
+        options.showFixRecordBranding = false
+        options.showLogo = true
+        XCTAssertFalse(options.effective(isPro: false).showLogo)
+        XCTAssertTrue(options.effective(isPro: true).showLogo)
+        for (kind, photos) in [(ExportKind.report, true), (.report, false), (.invoice, false)] {
+            let free = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: kind, job: job, profile: profile, options: options, includePhotos: photos)))
+            let words = free.string ?? ""
+            XCTAssertTrue(words.contains(profile.businessName))
+            XCTAssertTrue(words.contains(profile.email))
+            XCTAssertTrue(words.contains(profile.phone))
+            XCTAssertTrue(words.contains("Created with FixRecord"))
+            let pro = try XCTUnwrap(PDFDocument(data: PDFMaker.make(kind: kind, job: job, profile: profile, options: options, isPro: true, includePhotos: photos)))
+            XCTAssertFalse((pro.string ?? "").contains("Created with FixRecord"))
+        }
     }
 
     func testReceiptReviewRejectsIncompleteItems() {
@@ -482,6 +589,14 @@ final class FixRecordTests: XCTestCase {
         XCTAssertFalse(ReceiptParser.canConfirm(incomplete))
     }
 
+    func testReceiptAutoCaptureAcceptsNarrowReceiptsAndRejectsClippedOnes() {
+        XCTAssertTrue(ReceiptAutoCapture.accepts(CGRect(x: 0.4, y: 0.05, width: 0.15, height: 0.9)))
+        XCTAssertFalse(ReceiptAutoCapture.accepts(CGRect(x: 0.4, y: 0, width: 0.15, height: 1)))
+        XCTAssertFalse(ReceiptAutoCapture.accepts(CGRect(x: 0.4, y: 0.4, width: 0.1, height: 0.1)))
+        XCTAssertTrue(ReceiptAutoCapture.looksLikeReceipt(["STORE", "BOLT $2.00", "TAX $0.10", "TOTAL $2.10"]))
+        XCTAssertFalse(ReceiptAutoCapture.looksLikeReceipt(["A sign", "Some words", "More words", "Another line"]))
+    }
+
     func testReceiptParserReadsCurrencyQuantitiesAndSeparateUnitPrices() {
         let receipt = ["BUILDER'S SUPPLY", "DATE: 03/18/2026 TIME: 10:52:41 PM", "STORE # 042", "REG # 03", "CASHIER TOM", "TRANS # 371501855063", "DRILL 20V #SKU123 $89.99", "2 x 2X4X8 LUMBER #SKU456 @ $10.98", "$5.49", "SCREWS 100CT #SKU789 $8.99", "3 x SANDPAPER 80G #SKU012 @ $11.97", "$3.99", "SUBTOTAL $121.93", "TAX (6.5%) $7.93", "TOTAL $129.86", "PAYMENT CASH"]
         let parsed = ReceiptParser.parse(receipt)
@@ -489,9 +604,100 @@ final class FixRecordTests: XCTestCase {
         XCTAssertEqual(parsed.items.count, 4)
         XCTAssertEqual(parsed.items.map(\.quantity), ["1", "2", "1", "3"])
         XCTAssertEqual(parsed.items.map(\.unitPrice), ["89.99", "5.49", "8.99", "3.99"])
-        XCTAssertEqual(parsed.items.map(\.name), ["DRILL 20V #SKU123", "2X4X8 LUMBER #SKU456", "SCREWS 100CT #SKU789", "SANDPAPER 80G #SKU012"])
+        XCTAssertEqual(parsed.items.map(\.name), ["DRILL 20V", "2X4X8 LUMBER", "SCREWS 100CT", "SANDPAPER 80G"])
         XCTAssertTrue(ReceiptParser.canConfirm(parsed.items))
         XCTAssertEqual(parsed.total, "$129.86")
+    }
+
+    func testReceiptParserMarketReceiptKeepsPricesAndFlagsMismatch() {
+        let parsed = ReceiptParser.parse([
+            "DOWNTOWN MARKET", "15/03/2024 02:00", "REGISTER: 03",
+            "2X ORGANIC COFFEE BEANS", "(SKU:1284) $25.98",
+            "ALMOND MILK (SKU:5621) $4.49", "WHOLE GRAIN BREAD (SKU:3347) $5.99",
+            "3X FRESH AVOCADOS (SKU:7892) $5.97", "2X GREEK YOGURT (SKU:4156) $13.98",
+            "MEMBER DISCOUNT APPLIED: -$3.50", "LOYALTY POINTS EARNED: 45",
+            "SUBTOTAL: $54.42", "TAX: $4.89", "TOTAL: $59.31"
+        ])
+        XCTAssertEqual(parsed.items.map(\.name), ["ORGANIC COFFEE BEANS", "ALMOND MILK", "WHOLE GRAIN BREAD", "FRESH AVOCADOS", "GREEK YOGURT"])
+        XCTAssertEqual(parsed.items.map(\.quantity), ["2", "1", "1", "3", "2"])
+        XCTAssertEqual(parsed.items.map(\.unitPrice), ["12.99", "4.49", "5.99", "1.99", "6.99"])
+        XCTAssertEqual(parsed.items.reduce(Decimal.zero) { $0 + $1.total }, Decimal(string: "56.41"))
+        XCTAssertTrue(parsed.warning.contains("differ"))
+        XCTAssertEqual(parsed.total, "$59.31")
+    }
+
+    func testReceiptParserDoesNotTreatDiscountOrMetadataAsMaterial() {
+        let parsed = ReceiptParser.parse(["Shop", "TRANSACTION 123.45", "MEMBER DISCOUNT 3.50", "LOYALTY POINTS 45.00", "REGISTER 2.00", "TOTAL 0.00"])
+        XCTAssertTrue(parsed.items.isEmpty)
+        XCTAssertFalse(ReceiptParser.canConfirm(parsed.items))
+    }
+
+    func testReceiptParserUSQuantityLineAndTaxMarkers() {
+        let result = ReceiptParser.parse(["HARDWARE", "123456789012 SCREWS $6.98 T", "2 @ $3.49", "SALES TAX $0.56", "VISA $7.54", "TOTAL $7.54"])
+        XCTAssertEqual(result.items.map(\.name), ["SCREWS"])
+        XCTAssertEqual(result.items.map(\.quantity), ["2"])
+        XCTAssertEqual(result.items.map(\.unitPrice), ["3.49"])
+    }
+
+    func testReceiptParserWeightedItem() {
+        let result = ReceiptParser.parse(["MARKET", "APPLES 5.00 F", "1.25 lb @ 4.00/lb", "TOTAL 5.00"])
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items.first?.quantity, "1.25")
+        XCTAssertEqual(result.items.first?.unitPrice, "4")
+    }
+
+    func testReceiptParserFlagsConflictingQuantityWithoutInventingPrice() {
+        let result = ReceiptParser.parse(["STORE", "BOLTS 8.00", "2 ea @ 3.00", "TOTAL 8.00"])
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items.first?.total, 8)
+        XCTAssertEqual(result.uncertainItems, Set(result.items.map(\.id)))
+    }
+
+    func testReceiptParserKeepsLongReceiptRowsSeparate() {
+        let result = ReceiptParser.parse(ReceiptParser.lines(from: [
+            .init(text: "BOLTS", x: 0.2, y: 0.80, height: 0.007),
+            .init(text: "$3.00", x: 0.8, y: 0.80, height: 0.007),
+            .init(text: "NUTS", x: 0.2, y: 0.79, height: 0.007),
+            .init(text: "$2.00", x: 0.8, y: 0.79, height: 0.007)
+        ]))
+        XCTAssertEqual(result.items.map(\.name), ["BOLTS", "NUTS"])
+        XCTAssertEqual(result.items.map(\.total), [3, 2])
+    }
+
+    func testReceiptParserRejectsNegativeReturnsAndPaymentLines() {
+        let result = ReceiptParser.parse(["STORE", "BOLT 2.00", "RETURNED BOLT -$2.00", "COUPON 1.00", "STATE TAX 0.12", "MASTERCARD 2.12", "TOTAL 2.12"])
+        XCTAssertEqual(result.items.map(\.name), ["BOLT"])
+    }
+
+    func testReceiptParserChecksTotalWithoutSubtotal() {
+        let result = ReceiptParser.parse(["STORE", "BOLT 2.00", "TOTAL 3.00"])
+        XCTAssertTrue(result.warning.contains("missing"))
+    }
+
+    func testReceiptParserReconcilesTaxAndCouponWithoutChangingMaterials() {
+        let result = ReceiptParser.parse(["STORE", "BOLTS 10.00", "COUPON -$2.00", "SUBTOTAL 8.00", "SALES TAX 0.64", "TOTAL 8.64"])
+        XCTAssertEqual(result.items.map(\.total), [10])
+        XCTAssertEqual(result.warning, "Tax and discounts are not added to material prices.")
+    }
+
+    func testReceiptParserDetectsIncorrectTotalAfterTax() {
+        let result = ReceiptParser.parse(["STORE", "BOLTS 10.00", "SUBTOTAL 10.00", "TAX 0.80", "TOTAL 15.80"])
+        XCTAssertTrue(result.warning.contains("missing"))
+    }
+
+    func testReceiptParserUSCentsAndAttachedTaxMarker() {
+        let result = ReceiptParser.parse(["STORE", "WASHER $.99", "BOLT 1.50T", "TOTAL 2.49"])
+        XCTAssertEqual(result.items.map(\.total), [Decimal(string: "0.99")!, Decimal(string: "1.50")!])
+        XCTAssertTrue(result.warning.isEmpty)
+    }
+
+    func testReceiptParserExcludesAmountPaidIncludingSplitLines() {
+        for payment in ["AMOUNT PAID:", "Amount tendered", "Amount charged", "PAID", "Purchase total", "Net total", "Order total"] {
+            let inline = ReceiptParser.parse(["MARKET", "YOGURT 13.98", "TOTAL 13.98", "\(payment) $13.98"])
+            let split = ReceiptParser.parse(["MARKET", "YOGURT 13.98", "TOTAL 13.98", payment, "$13.98"])
+            XCTAssertEqual(inline.items.map(\.name), ["YOGURT"])
+            XCTAssertEqual(split.items.map(\.name), ["YOGURT"])
+        }
     }
 
     func testReceiptParserMergesSeparateNameAndPriceFragments() {

@@ -44,7 +44,7 @@ struct ExportView: View {
     private var hasBusinessName: Bool { renderProfile?.businessName.isEmpty == false || !job.businessName.isEmpty }
     private var clientPackLocked: Bool { kind == .pack && !entitlements.isPro }
     private var documentDetailsSubtitle: String {
-        guard hasBusinessName else { return "Add your business details" }
+        guard hasBusinessName else { return "Name and contact details · Free" }
         if let name = job.documentPreset?.name { return name }
         let businessName = renderProfile?.businessName ?? ""
         return businessName.isEmpty ? job.businessName : businessName
@@ -116,31 +116,34 @@ struct ExportView: View {
     private var clientPackPreview: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 20)
-            VStack(spacing: 18) {
-                Image(systemName: "doc.on.doc.fill")
-                    .font(.system(size: 34, weight: .medium))
-                    .foregroundStyle(Brand.blue)
-                    .frame(width: 76, height: 76)
-                    .background(Brand.pale, in: RoundedRectangle(cornerRadius: 22))
-                Text("One PDF for your client")
-                    .font(.title2.bold()).foregroundStyle(Brand.navy)
-                Text("Combine the work report and invoice in one ready-to-share document.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                Label("Included with Pro", systemImage: "star.fill")
-                    .font(.caption.bold()).foregroundStyle(Brand.blue)
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(Brand.pale, in: Capsule())
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "doc.on.doc.fill")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(Brand.blue)
+                        .frame(width: 52, height: 52)
+                        .background(Brand.pale, in: RoundedRectangle(cornerRadius: 15))
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("Client Pack")
+                                .font(.headline).foregroundStyle(Brand.navy)
+                            Text("PRO")
+                                .font(.caption2.bold()).foregroundStyle(Brand.blue)
+                                .padding(.horizontal, 7).padding(.vertical, 4)
+                                .background(Brand.pale, in: Capsule())
+                        }
+                        Text("Report + invoice.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
                 Button { showingUpgrade = true } label: {
-                    Text("View Pro options").font(.headline).frame(maxWidth: .infinity)
+                    Text("Get Pro").font(.headline).frame(maxWidth: .infinity)
                 }
                     .buttonStyle(.borderedProminent).controlSize(.large)
-                    .padding(.top, 4)
-                Text("Reports and invoices can still be exported separately for free.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
-            .padding(24)
+            .padding(20)
             .frame(maxWidth: 420)
             .background(.white, in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Brand.navy.opacity(0.06)))
@@ -161,7 +164,7 @@ struct ExportView: View {
                         .frame(width: 40, height: 40)
                         .background(Brand.pale, in: RoundedRectangle(cornerRadius: 12))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Document details").font(.subheadline.bold()).foregroundStyle(Brand.navy)
+                        Text(hasBusinessName ? "Document details" : "Add your business name").font(.subheadline.bold()).foregroundStyle(Brand.navy)
                         Text(documentDetailsSubtitle)
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -277,7 +280,7 @@ enum PDFMaker {
         }
         return UIGraphicsPDFRenderer(bounds: page).pdfData { context in
             if kind == .report || kind == .pack {
-                if includePhotos && !job.photos.isEmpty { drawReport(context, job: job, profile: profile, options: effective) }
+                if includePhotos && job.photos.contains(where: { $0.includeInReport }) { drawReport(context, job: job, profile: profile, options: effective) }
                 else { drawTextReport(context, job: job, profile: profile, options: effective) }
             }
             if kind == .invoice || kind == .pack { drawInvoice(context, job: job, profile: profile, options: effective) }
@@ -285,10 +288,12 @@ enum PDFMaker {
     }
 
     static func photoPairs(before: [JobPhoto], after: [JobPhoto]) -> [(JobPhoto?, JobPhoto?)] {
-        before.flatMap { original -> [(JobPhoto?, JobPhoto?)] in
-            let matched = after.filter { $0.pairedBeforeID == original.id }
+        let includedBefore = before.filter { $0.includeInReport }
+        let includedAfter = after.filter { $0.includeInReport }
+        return includedBefore.flatMap { original -> [(JobPhoto?, JobPhoto?)] in
+            let matched = includedAfter.filter { $0.pairedBeforeID == original.id }
             return matched.isEmpty ? [(original, nil)] : matched.map { (original, $0) }
-        } + after.filter { item in !before.contains(where: { $0.id == item.pairedBeforeID }) }.map { (nil, $0) }
+        } + includedAfter.filter { item in !includedBefore.contains(where: { $0.id == item.pairedBeforeID }) }.map { (nil, $0) }
     }
 
     private static func drawReport(_ context: UIGraphicsPDFRendererContext, job: Job, profile: BusinessProfile?, options: DocumentOptions) {
@@ -313,10 +318,10 @@ enum PDFMaker {
         for pair in photoPairs(before: before, after: after) {
             ensure(205, y: &y, context: context, options: options)
             if pair.0 != nil && pair.1 != nil {
-                photo(pair.0, title: "BEFORE", x: margin, y: y)
-                photo(pair.1, title: "AFTER", x: margin + 258, y: y)
+                photo(pair.0, title: "BEFORE", x: margin, y: y, showLabel: options.showPhotoLabels)
+                photo(pair.1, title: "AFTER", x: margin + 258, y: y, showLabel: options.showPhotoLabels)
             } else {
-                photo(pair.0 ?? pair.1, title: pair.0 == nil ? "AFTER" : "BEFORE", x: margin, y: y, width: contentWidth)
+                photo(pair.0 ?? pair.1, title: pair.0 == nil ? "AFTER" : "BEFORE", x: margin, y: y, width: contentWidth, showLabel: options.showPhotoLabels)
             }
             y += 201
         }
@@ -356,10 +361,6 @@ enum PDFMaker {
         var nameX = margin
         if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
             aspectFill(logo, in: CGRect(x: margin, y: 34, width: 48, height: 48)); nameX += 60
-        } else if options.showFixRecordBranding {
-            fill(CGRect(x: margin, y: 34, width: 48, height: 48), colour: navy)
-            drawPDFSymbol("wrench.adjustable.fill", in: CGRect(x: margin + 10, y: 44, width: 28, height: 28), colour: .white)
-            nameX += 60
         }
         text(business.isEmpty ? "Your Business" : business, x: nameX, y: 38, width: 280, size: 20, bold: true, colour: navy)
         text("Professional work documentation", x: nameX, y: 66, width: 270, size: 9, colour: .darkGray)
@@ -512,7 +513,7 @@ enum PDFMaker {
             let items = job.items.filter { $0.kind == kind }
             guard !items.isEmpty else { continue }
             ensure(27, y: &y, context: context, options: options)
-            fill(CGRect(x: margin, y: y, width: contentWidth, height: 20), colour: options.template == .classic ? UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1) : pale)
+            fill(CGRect(x: margin, y: y, width: contentWidth, height: 20), colour: templateTint(options.template))
             text(heading, x: margin + 7, y: y + 4, width: 280, size: 8, bold: true, colour: navy); y += 21
             for item in items {
                 ensure(27, y: &y, context: context, options: options)
@@ -528,7 +529,7 @@ enum PDFMaker {
         amount("Subtotal", totals.subtotal, currency: job.currencyCode, y: &y)
         if options.showDiscount && totals.discount > 0 { amount("Discount", -totals.discount, currency: job.currencyCode, y: &y) }
         if options.showTax && totals.tax > 0 { amount("Tax / VAT (\(job.taxRate)%)", totals.tax, currency: job.currencyCode, y: &y) }
-        fill(CGRect(x: 333, y: y + 2, width: 218, height: 33), colour: options.template == .classic ? UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1) : pale)
+        fill(CGRect(x: 333, y: y + 2, width: 218, height: 33), colour: templateTint(options.template))
         amount("TOTAL DUE", totals.grandTotal, currency: job.currencyCode, y: &y, bold: true)
         if options.showPaymentInstructions, let payment = profile?.paymentInstructions, !payment.isEmpty {
             y += 15; section("PAYMENT DETAILS", y: &y); paragraph(payment, y: &y, context: context, options: options)
@@ -545,6 +546,43 @@ enum PDFMaker {
         let contact = options.showBusinessDetails ? [profile?.phone, profile?.email, profile?.address,
             title == "INVOICE" && profile?.taxNumber.isEmpty == false ? "Tax / VAT: \(profile!.taxNumber)" : nil]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "  ·  ") : ""
+        if [.executive, .editorial, .precision, .copper, .horizon].contains(options.template) {
+            return collectionHeader(title, name: name, contact: contact, profile: profile, options: options)
+        }
+        if [.studio, .blueprint].contains(options.template) {
+            let template = options.template
+            let accent = templateAccent(template)
+            let darkHeader = template == .blueprint
+            let ink: UIColor = darkHeader ? .white : accent
+            let background = darkHeader ? accent : templateTint(template)
+            background.setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 100)).fill()
+            if template == .studio {
+                accent.setFill()
+                UIBezierPath(rect: CGRect(x: margin, y: 23, width: 30, height: 3)).fill()
+            } else {
+                let grid = UIBezierPath()
+                for x in stride(from: CGFloat(380), through: page.width, by: 18) {
+                    grid.move(to: CGPoint(x: x, y: 0)); grid.addLine(to: CGPoint(x: x, y: 100))
+                }
+                for y in stride(from: CGFloat(10), through: CGFloat(100), by: 18) {
+                    grid.move(to: CGPoint(x: 380, y: y)); grid.addLine(to: CGPoint(x: page.width, y: y))
+                }
+                UIColor.white.withAlphaComponent(0.08).setStroke(); grid.lineWidth = 0.5; grid.stroke()
+            }
+            var nameX = margin
+            if options.showLogo, let logo = profile.flatMap({ PhotoStore.image($0.logoFilename) }) {
+                fill(CGRect(x: margin, y: 35, width: 42, height: 42), colour: .white)
+                aspectFill(logo, in: CGRect(x: margin + 3, y: 38, width: 36, height: 36))
+                nameX += 54
+            }
+            text(name, x: nameX, y: 34, width: 365 - nameX, size: 22, bold: template != .studio,
+                 colour: ink, design: template == .studio ? .serif : .default)
+            text(contact, x: nameX, y: 65, width: 551 - nameX, height: 28, size: 8,
+                 colour: ink.withAlphaComponent(0.8), wrap: true)
+            text(title, x: 399, y: 39, width: 152, size: 9, bold: true, colour: ink, alignment: .right)
+            return 118
+        }
         if options.template == .classic {
             navy.setFill(); UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 96)).fill()
             var x = margin
@@ -584,13 +622,82 @@ enum PDFMaker {
         return 111
     }
 
-    private static func photo(_ value: JobPhoto?, title: String, x: CGFloat, y: CGFloat, width: CGFloat = 249) {
+    private static func collectionHeader(_ title: String, name: String, contact: String, profile: BusinessProfile?, options: DocumentOptions) -> CGFloat {
+        let template = options.template
+        let accent = templateAccent(template)
+        let logo = options.showLogo ? profile.flatMap({ PhotoStore.image($0.logoFilename) }) : nil
+        switch template {
+        case .executive:
+            // A compact dark masthead with the contact line on white below it.
+            fill(CGRect(x: margin, y: 26, width: contentWidth, height: 58), colour: accent)
+            var x = margin + 16
+            if let logo {
+                fill(CGRect(x: x, y: 36, width: 38, height: 38), colour: .white)
+                aspectFill(logo, in: CGRect(x: x + 3, y: 39, width: 32, height: 32)); x += 50
+            }
+            text(name, x: x, y: 43, width: 381 - x, size: 20, bold: true, colour: .white)
+            text(title, x: 391, y: 49, width: 144, size: 8, bold: true, colour: .white, alignment: .right)
+            text(contact, x: margin, y: 92, width: contentWidth, height: 22, size: 8, colour: .darkGray, wrap: true)
+        case .editorial:
+            // An open, typographic letterhead with a fine double rule.
+            var x = margin
+            if let logo { aspectFill(logo, in: CGRect(x: x, y: 31, width: 40, height: 40)); x += 54 }
+            text(title, x: x, y: 26, width: 551 - x, size: 8, bold: true, colour: accent)
+            text(name, x: x, y: 42, width: 551 - x, size: 26, colour: accent, design: .serif)
+            text(contact, x: x, y: 77, width: 551 - x, height: 24, size: 8, colour: .darkGray, wrap: true)
+            headerRule(y: 108, colour: accent, thickness: 1.5)
+            headerRule(y: 112, colour: accent, thickness: 0.4)
+        case .precision:
+            // A technical document label beside an independent business column.
+            accent.setFill()
+            UIBezierPath(rect: CGRect(x: margin, y: 28, width: 125, height: 60)).fill()
+            text(title.replacingOccurrences(of: " ", with: "\n"), x: margin + 12, y: 40, width: 101, height: 40,
+                 size: 12, bold: true, colour: .white, wrap: true, design: .monospaced)
+            let x: CGFloat = logo == nil ? 190 : 239
+            if let logo { aspectFill(logo, in: CGRect(x: 190, y: 31, width: 36, height: 36)) }
+            text(name, x: x, y: 31, width: 551 - x, size: 20, bold: true, colour: accent)
+            text(contact, x: 190, y: 61, width: 361, height: 38, size: 8, colour: .darkGray, wrap: true)
+            headerRule(y: 109, colour: accent, thickness: 1)
+        case .copper:
+            // Warm paper, a narrow copper rail and a right-aligned document label.
+            templateTint(template).setFill()
+            UIBezierPath(rect: CGRect(x: margin, y: 24, width: contentWidth, height: 85)).fill()
+            accent.setFill()
+            UIBezierPath(rect: CGRect(x: margin, y: 24, width: 4, height: 85)).fill()
+            var x = margin + 18
+            if let logo { aspectFill(logo, in: CGRect(x: x, y: 38, width: 38, height: 38)); x += 50 }
+            text(name, x: x, y: 36, width: 382 - x, size: 23, colour: accent, design: .serif)
+            text(title, x: 395, y: 42, width: 140, size: 8, bold: true, colour: accent, alignment: .right)
+            text(contact, x: x, y: 70, width: 535 - x, height: 29, size: 8, colour: .darkGray, wrap: true)
+        case .horizon:
+            // Asymmetric colour blocks keep the business identity on white.
+            accent.setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: 0, width: page.width, height: 7)).fill()
+            fill(CGRect(x: 405, y: 29, width: 146, height: 34), colour: accent)
+            text(title, x: 413, y: 41, width: 130, size: 8, bold: true, colour: .white, alignment: .center)
+            var x = margin
+            if let logo { aspectFill(logo, in: CGRect(x: x, y: 32, width: 38, height: 38)); x += 50 }
+            text(name, x: x, y: 34, width: 387 - x, size: 23, bold: true, colour: accent)
+            text(contact, x: x, y: 73, width: 551 - x, height: 27, size: 8, colour: .darkGray, wrap: true)
+            headerRule(y: 110, colour: templateTint(template), thickness: 3)
+        default: break
+        }
+        return 126
+    }
+
+    private static func headerRule(y: CGFloat, colour: UIColor, thickness: CGFloat) {
+        colour.setFill()
+        UIBezierPath(rect: CGRect(x: margin, y: y, width: contentWidth, height: thickness)).fill()
+    }
+
+    private static func photo(_ value: JobPhoto?, title: String, x: CGFloat, y: CGFloat, width: CGFloat = 249, showLabel: Bool = true) {
         let box = CGRect(x: x, y: y, width: width, height: 187)
         if let value, let image = PhotoStore.image(value.filename) { aspectFill(image, in: box) }
         else {
             fill(box, colour: pale)
             text("Photo unavailable", x: x + 20, y: y + 82, width: width - 40, size: 11, colour: .gray, alignment: .center)
         }
+        guard showLabel else { return }
         fill(CGRect(x: x, y: y, width: 66, height: 23), colour: title == "AFTER" ? green : navy)
         text(title, x: x + 8, y: y + 5, width: 55, size: 9, bold: true, colour: .white)
     }
@@ -615,8 +722,8 @@ enum PDFMaker {
         }
     }
     private static func tableHeader(y: inout CGFloat, template: DocumentTemplate) {
-        fill(CGRect(x: margin, y: y, width: contentWidth, height: 29), colour: template == .minimal ? pale : navy)
-        let colour: UIColor = template == .minimal ? navy : .white
+        fill(CGRect(x: margin, y: y, width: contentWidth, height: 29), colour: [.minimal, .studio, .editorial, .precision].contains(template) ? templateTint(template) : templateAccent(template))
+        let colour: UIColor = [.minimal, .studio, .editorial, .precision].contains(template) ? templateAccent(template) : .white
         text("DESCRIPTION", x: margin + 7, y: y + 9, width: 240, size: 8, bold: true, colour: colour)
         text("QTY / HOURS", x: 314, y: y + 9, width: 63, size: 8, bold: true, colour: colour)
         text("RATE", x: 386, y: y + 9, width: 65, size: 8, bold: true, colour: colour)
@@ -633,12 +740,22 @@ enum PDFMaker {
     }
     private static func footer(job: Job?, options: DocumentOptions) {
         line(797)
-        if options.showFixRecordBranding { text("Generated with FixRecord", x: margin, y: 807, width: 230, size: 8, colour: .darkGray) }
+        if options.showFixRecordBranding { text("Created with FixRecord", x: margin, y: 807, width: 230, size: 8, colour: .darkGray) }
         else if let job { text(job.businessName, x: margin, y: 807, width: 230, size: 8, colour: .darkGray) }
         if let job { text(job.number, x: 430, y: 807, width: 117, size: 8, colour: .darkGray, alignment: .right) }
     }
     private static func panel(_ rect: CGRect, template: DocumentTemplate) {
-        if template != .minimal { fill(rect, colour: pale) }
+        if template == .editorial || template == .precision {
+            let border = UIBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
+            templateAccent(template).withAlphaComponent(0.25).setStroke()
+            border.lineWidth = 0.5; border.stroke()
+            return
+        }
+        if template != .minimal { fill(rect, colour: templateTint(template)) }
+        if template == .blueprint || template == .studio {
+            templateAccent(template).setFill()
+            UIBezierPath(rect: CGRect(x: rect.minX + 10, y: rect.minY, width: 24, height: 2)).fill()
+        }
         if template == .classic {
             UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1).setFill()
             UIBezierPath(rect: rect).fill()
@@ -648,6 +765,30 @@ enum PDFMaker {
         if template == .minimal {
             let rule = UIBezierPath(); rule.move(to: CGPoint(x: rect.minX + 9, y: rect.maxY)); rule.addLine(to: CGPoint(x: rect.maxX - 9, y: rect.maxY))
             UIColor.lightGray.setStroke(); rule.lineWidth = 0.5; rule.stroke()
+        }
+    }
+    private static func templateAccent(_ template: DocumentTemplate) -> UIColor {
+        switch template {
+        case .studio: return UIColor(red: 0.35, green: 0.25, blue: 0.20, alpha: 1)
+        case .executive: return UIColor(red: 0.16, green: 0.19, blue: 0.23, alpha: 1)
+        case .editorial: return UIColor(red: 0.26, green: 0.19, blue: 0.25, alpha: 1)
+        case .precision: return UIColor(white: 0.15, alpha: 1)
+        case .copper: return UIColor(red: 0.53, green: 0.26, blue: 0.16, alpha: 1)
+        case .horizon: return UIColor(red: 0.24, green: 0.25, blue: 0.56, alpha: 1)
+        case .blueprint: return UIColor(red: 0.10, green: 0.26, blue: 0.47, alpha: 1)
+        default: return navy
+        }
+    }
+    private static func templateTint(_ template: DocumentTemplate) -> UIColor {
+        switch template {
+        case .classic: return UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1)
+        case .studio: return UIColor(red: 0.98, green: 0.96, blue: 0.92, alpha: 1)
+        case .executive, .precision: return UIColor(white: 0.96, alpha: 1)
+        case .editorial: return UIColor(red: 0.97, green: 0.95, blue: 0.96, alpha: 1)
+        case .copper: return UIColor(red: 0.98, green: 0.95, blue: 0.91, alpha: 1)
+        case .horizon: return UIColor(red: 0.95, green: 0.95, blue: 0.99, alpha: 1)
+        case .blueprint: return UIColor(red: 0.93, green: 0.96, blue: 0.99, alpha: 1)
+        default: return pale
         }
     }
     private static func fill(_ rect: CGRect, colour: UIColor) { colour.setFill(); UIBezierPath(roundedRect: rect, cornerRadius: 5).fill() }
@@ -660,8 +801,10 @@ enum PDFMaker {
         image.draw(in: CGRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
         graphics.restoreGState()
     }
-    private static func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat = 40, size: CGFloat, bold: Bool = false, colour: UIColor = .black, alignment: NSTextAlignment = .left, wrap: Bool = false) {
+    private static func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat = 40, size: CGFloat, bold: Bool = false, colour: UIColor = .black, alignment: NSTextAlignment = .left, wrap: Bool = false, design: UIFontDescriptor.SystemDesign = .default) {
         let style = NSMutableParagraphStyle(); style.alignment = alignment; style.lineBreakMode = wrap ? .byWordWrapping : .byTruncatingTail
-        NSString(string: value).draw(in: CGRect(x: x, y: y, width: width, height: height), withAttributes: [.font: bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size), .foregroundColor: colour, .paragraphStyle: style])
+        let baseFont = bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size)
+        let font = UIFont(descriptor: baseFont.fontDescriptor.withDesign(design) ?? baseFont.fontDescriptor, size: size)
+        NSString(string: value).draw(in: CGRect(x: x, y: y, width: width, height: height), withAttributes: [.font: font, .foregroundColor: colour, .paragraphStyle: style])
     }
 }
