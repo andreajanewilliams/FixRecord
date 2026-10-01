@@ -55,7 +55,8 @@ final class CameraController: NSObject, ObservableObject, AVCapturePhotoCaptureD
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    func makeUIView(context: Context) -> PreviewView { let view = PreviewView(); view.layerSession.session = session; return view }
+    var gravity: AVLayerVideoGravity = .resizeAspectFill
+    func makeUIView(context: Context) -> PreviewView { let view = PreviewView(); view.layerSession.session = session; view.layerSession.videoGravity = gravity; return view }
     func updateUIView(_ uiView: PreviewView, context: Context) {}
 }
 final class PreviewView: UIView {
@@ -88,13 +89,23 @@ struct PhotoCaptureView: View {
                     }.pickerStyle(.menu)
                     HStack { Text("Ghost opacity"); Slider(value: $ghostOpacity, in: 0.1...0.75) }
                 }
-                ZStack {
-                    CameraPreview(session: camera.session).frame(height: 430).clipped()
-                    if kind == .after, let photo = beforePhotos.first(where: { $0.id == selectedBeforeID }), let image = PhotoStore.image(photo.filename) {
-                        Image(uiImage: image).resizable().scaledToFill().frame(height: 430).clipped().opacity(ghostOpacity)
+                Color.black.aspectRatio(3.0 / 4.0, contentMode: .fit)
+                    .overlay {
+                        GeometryReader { geometry in
+                            ZStack {
+                                CameraPreview(session: camera.session, gravity: .resizeAspect)
+                                if kind == .after, let photo = beforePhotos.first(where: { $0.id == selectedBeforeID }), let image = PhotoStore.image(photo.filename) {
+                                    Image(uiImage: image).resizable().scaledToFit()
+                                        .frame(width: geometry.size.width, height: geometry.size.height)
+                                        .opacity(ghostOpacity)
+                                }
+                                if let error = camera.error {
+                                    Text(error).padding().background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.white)
+                                }
+                            }.frame(width: geometry.size.width, height: geometry.size.height)
+                        }
                     }
-                    if camera.error != nil { Text(camera.error ?? "").padding().background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.white) }
-                }.clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
                 if UIImagePickerController.isSourceTypeAvailable(.camera) { HStack { Button { camera.flashEnabled.toggle() } label: { Image(systemName: camera.flashEnabled ? "bolt.fill" : "bolt.slash") }; Spacer(); Button { camera.capture() } label: { Image(systemName: "circle.inset.filled").font(.system(size: 62)) }; Spacer(); Text(" ") }.padding(.horizontal, 30) }
                 PhotosPicker(selection: $selectedItem, matching: .images) { Label("Choose Photo", systemImage: "photo.on.rectangle") }.buttonStyle(.bordered)
                 if kind == .after && beforePhotos.isEmpty { Text("Add a before photo first to use the MatchShot ghost overlay.").font(.caption).foregroundStyle(.secondary) }

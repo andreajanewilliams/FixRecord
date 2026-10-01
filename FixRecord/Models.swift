@@ -462,8 +462,9 @@ enum PhotoStore {
     static func save(_ image: UIImage, preserveTransparency: Bool = false) throws -> String {
         let filename = UUID().uuidString + (preserveTransparency ? ".png" : ".jpg")
         guard image.size.width > 0, image.size.height > 0 else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
-        let pixelWidth = CGFloat(image.cgImage?.width ?? Int(image.size.width * image.scale))
-        let pixelHeight = CGFloat(image.cgImage?.height ?? Int(image.size.height * image.scale))
+        // UIImage.size accounts for orientation; raw sensor dimensions may be rotated.
+        let pixelWidth = image.size.width * image.scale
+        let pixelHeight = image.size.height * image.scale
         let scale = min(1, 2400 / max(pixelWidth, pixelHeight))
         let target = CGSize(width: pixelWidth * scale, height: pixelHeight * scale)
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false

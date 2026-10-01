@@ -5,6 +5,20 @@ import SwiftData
 @testable import FixRecord
 
 final class FixRecordTests: XCTestCase {
+    func testSavingRotatedCameraPhotoPreservesPortraitShape() throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let sensorImage = UIGraphicsImageRenderer(size: CGSize(width: 3200, height: 2400), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 3200, height: 2400))
+        }
+        let portrait = UIImage(cgImage: try XCTUnwrap(sensorImage.cgImage), scale: 1, orientation: .right)
+        let filename = try PhotoStore.save(portrait)
+        defer { PhotoStore.delete(filename) }
+        let saved = try XCTUnwrap(PhotoStore.image(filename))
+        XCTAssertEqual(saved.size.width, 1800, accuracy: 1)
+        XCTAssertEqual(saved.size.height, 2400, accuracy: 1)
+        XCTAssertEqual(saved.imageOrientation, .up)
+    }
+
     func testReceiptTableExcludesSummaryMergedWithNotes() {
         let result = ReceiptParser.parse([
             "No. Description Quantity Unit Price Total",
