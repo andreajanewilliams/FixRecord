@@ -165,7 +165,7 @@ struct NotesView: View {
         let hasEvidence = !job.roughNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasPhotoEvidence
         return Form {
             Section { VoiceTextInput(title: "Reported Issue", placeholder: "What was reported?", text: $job.issue) }
-            Section { VoiceTextInput(title: "Work Completed", placeholder: "Describe what you completed…", text: $job.roughNote) }
+            Section { VoiceTextInput(title: "Work Completed", placeholder: "What did you fix, how did you fix it, and did you test it?", text: $job.roughNote) }
             Section {
                 Button { requestImprovement() } label: { Label(busy ? "Improving…" : "Improve with AI", systemImage: "sparkles") }
                     .disabled(busy || !AIService.isConfigured || !hasEvidence)

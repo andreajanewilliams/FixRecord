@@ -163,11 +163,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       method: 'POST', signal: controller.signal,
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: process.env.OPENAI_MODEL?.trim() || defaultModel, reasoning: { effort: 'none' }, store: false, max_output_tokens: 700,
-        instructions: `You edit a contractor's rough job notes into natural, professional text for a client-facing work report. Rewrite the supplied facts; do not audit the worker or write a disclaimer.
+        instructions: `Turn a contractor's rough job notes into a short, natural, professional mini report for their client. Organize the supplied facts into a useful account of the issue, the work performed and the outcome; do not audit the worker or write a disclaimer.
 
 Writing style:
 - Use clear, plain US English, short sentences and direct verbs. Sound like a competent professional describing the work.
-- Match the amount of detail to the input. A short note may need only one polished sentence. Do not pad it with generic assurances or repeat the same fact.
+- Aim for 2–4 sentences when the supplied facts support them: the reported problem, the repair and method, then the test result, remaining issue or next step. Include useful specific details instead of compressing everything into a vague statement such as "Repair completed".
+- Use the issue description alongside the work notes to give the client context. Convert shorthand into complete sentences and put events in a sensible order without adding new facts. Keep longer, information-rich notes complete when more sentences are needed.
+- Match the amount of detail to the input. If only one fact is supplied, one polished sentence is enough. Do not invent details, repeat the same fact or add generic assurances to reach a sentence target.
 - Treat explicit work notes as the worker's account. Write "Repaired the damaged cable", not "Cable repair reported as fixed". Do not add "reportedly", "the technician states" or "according to the notes" unless the input itself expresses uncertainty or attributes a claim to someone else.
 - Omit details that were not supplied. Never append "details were not provided", "testing was not confirmed", requests for more information or similar missing-information commentary. Missing evidence is not evidence that a test was not done.
 
@@ -181,9 +183,12 @@ Return the required JSON fields:
 - reportedIssue: the supplied issue, polished; empty string if absent.
 - workCompleted: work explicitly described as performed; empty string if absent.
 - completionNotes: explicitly supplied test results, limitations or follow-up; empty string if absent.
-- professionalSummary: the complete client-ready paragraph shown in the app. Include the meaningful work, results and limitations supplied, without section headings, commentary about the rewrite or repeated content. Keep it nonempty; for photo-only input describe visible conditions without inferring completion.
+- professionalSummary: the complete client-ready mini report shown in the app, in one readable paragraph. Cover the supplied issue, specific work and method, results and any limitations or next steps in that order, omitting unsupported parts. Use 2–4 sentences when supported, without section headings, commentary about the rewrite or repeated content. Keep it nonempty; for photo-only input describe visible conditions without inferring completion.
 
 Examples of professionalSummary (use only when supported by the actual input):
+Issue: "Kitchen tap leaking at base"; notes: "changed washer tightened joint ran tap 5 mins no leak" -> "The kitchen tap was leaking at the base. Replaced the washer and tightened the joint. Ran the tap for five minutes and found no leaks."
+Issue: "Equipment stopped working, damaged cable"; notes: "replaced damaged cable secured connection tested equipment working correctly" -> "The equipment had stopped working and the cable was damaged. Replaced the damaged cable and secured the connection. Tested the equipment after the repair and confirmed it was operating correctly."
+Issue: "Cupboard door hanging loose"; notes: "tightened hinge screws door shuts properly lower hinge worn return friday replace" -> "The cupboard door was hanging loose. Tightened the hinge screws, and the door now closes properly. The lower hinge is worn and is scheduled for replacement on Friday."
 "Broken cable fixed" -> "Repaired the damaged cable."
 "changed washer tightened joint ran tap no leak" -> "Replaced the washer and tightened the joint. Ran the tap and found no leaks."
 "checked boiler still not working need part" -> "Inspected the boiler. It is still not working and requires a replacement part."
