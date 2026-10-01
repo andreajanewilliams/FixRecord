@@ -36,6 +36,8 @@ Requires **Xcode 26.3 or later** and **iOS 17 or later**.
 
 Jobs, receipt scanning and PDF exports work without backend configuration. Camera features need a physical iPhone; the simulator supports importing photos. Sample photos are generated demo assets depicting a fictional repair.
 
+Judges: the RevenueCat Test Store SDK key and AI access code are in the private **Additional notes for the judges** field on Devpost. Follow the [judge walkthrough](docs/JUDGING.md) for setup; the AI endpoint is already configured.
+
 ## Guides
 
 - [Judge walkthrough](docs/JUDGING.md) — a five-minute tour, Test Store setup and optional AI access.
