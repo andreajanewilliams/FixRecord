@@ -21,14 +21,14 @@ Choose **Add Example Job** at the end of onboarding, then select **Completed →
 
 The private submission notes provide the public RevenueCat Test Store SDK key. Alternatively, create your own Test Store project with a `pro` entitlement and a current offering containing monthly and annual packages, each attached to that entitlement.
 
-Copy `Local.xcconfig.example` to ignored `Local.xcconfig` and fill in the public Test Store key. Leave `AI_ENDPOINT` empty if not testing AI. Never place a RevenueCat secret key or an OpenAI key in this file.
+Copy `Local.xcconfig.example` to ignored `Local.xcconfig` and fill in the public Test Store key. The hosted AI endpoint is already configured; leave it unchanged to use the private judging code. Never place a RevenueCat secret key or an OpenAI key in this file.
 
 ```sh
 xcrun simctl list devices available
 xcodebuild build -project FixRecord.xcodeproj -scheme FixRecord   -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID'   -xcconfig Local.xcconfig CODE_SIGNING_ALLOWED=NO
 ```
 
-For Xcode’s Run button, put the same values in the app target’s Debug User-Defined build settings (`REVENUECAT_API_KEY` and optionally `AI_ENDPOINT`); simply copying the file does not attach it to the project. Use a literal HTTPS URL in Xcode’s settings UI.
+For Xcode’s Run button, put the same values in the app target’s Debug User-Defined build settings (`REVENUECAT_API_KEY`); simply copying the file does not attach it to the project. The `AI_ENDPOINT` setting already points to the hosted demo.
 
 Open Settings → FixRecord Pro, choose Monthly or Yearly, and continue through the simulated purchase sheet. Verify Pro becomes active and permits a premium export. Use Restore Purchases to check the entitlement again. The configured offering is US$4.99 monthly / US$39.99 yearly with seven-day trials; trial visibility depends on eligibility, and a returning test customer may not qualify. Test Store renewal timing is accelerated. Test purchases are not production payments. Test Store subscription management differs from Apple’s subscription settings.
 
@@ -36,7 +36,7 @@ Open Settings → FixRecord Pro, choose Monthly or Yearly, and continue through 
 
 AI writing is separate from receipt scanning. Receipts never go to an AI API. The optional writing action sends job text, material names and up to one Before/After photo to the configured server and OpenAI. Review and accept the proposed text before using it.
 
-Use the HTTPS endpoint and private access code in the submission notes, or deploy `backend/` with your own credentials from `.env.example`. Enter the access code when Improve with AI prompts. Codes never belong in source control. A work note or readable job photo is needed. The server validates the code, enforces 3 Free / 30 Pro requests per installation per month and an aggregate 1,000-request judging cap, and uses Redis for hosted limits. Pro AI demo access is determined by the code, separately from Test Store purchases. The manual workflow remains usable when the endpoint is unavailable or its allowance is exhausted.
+The app defaults to `https://fixrecord-api.vercel.app/api/generate-report`. Use the private access code from the submission notes; no endpoint setup is needed. To use your own server, deploy `backend/` with your own credentials from `.env.example` and override `AI_ENDPOINT`. Enter the access code when Improve with AI prompts. Codes never belong in source control. A work note or readable job photo is needed. The server validates the code, enforces 3 Free / 30 Pro requests per installation per month and an aggregate 1,000-request judging cap, and uses Redis for hosted limits. Pro AI demo access is determined by the code, separately from Test Store purchases. The manual workflow remains usable when the endpoint is unavailable or its allowance is exhausted.
 
 ## Testing and data
 

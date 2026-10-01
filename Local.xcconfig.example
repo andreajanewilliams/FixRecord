@@ -2,7 +2,7 @@
 // Obtain the submission values from the private judge notes, or configure your own services.
 REVENUECAT_API_KEY = YOUR_PUBLIC_TEST_STORE_SDK_KEY
 // The empty expansion preserves both URL slashes in xcconfig syntax.
-AI_ENDPOINT =
+AI_ENDPOINT = https:/$()/fixrecord-api.vercel.app/api/generate-report
 // Example: AI_ENDPOINT = https:/$()/YOUR_DEPLOYMENT.vercel.app/api/generate-report
 // Optional for physical-device builds; choose your own signing team and bundle ID.
 // DEVELOPMENT_TEAM = YOUR_TEAM_ID
